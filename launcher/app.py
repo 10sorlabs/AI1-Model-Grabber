@@ -31,6 +31,7 @@ COMFYUI_DIR = Path(
 ).resolve()
 CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
+DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
 
 class InstallCancelled(Exception):
@@ -134,6 +135,23 @@ def safe_destination(relative_path: str) -> Path:
     return destination
 
 
+def huggingface_token() -> str:
+    token = (
+        os.getenv("HF_TOKEN", "").strip()
+        or os.getenv("HUGGING_FACE_HUB_TOKEN", "").strip()
+    )
+    if token:
+        return token
+
+    token_file = Path(
+        os.getenv("HF_TOKEN_FILE", str(DEFAULT_HF_TOKEN_FILE))
+    ).expanduser()
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
 def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     url = str(file_spec.get("url", "")).strip()
     if not url.startswith(("https://", "http://")):
@@ -143,10 +161,10 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     headers = {"User-Agent": "10sorLabs-Model-Grabber/1.0"}
 
     if auth == "huggingface":
-        token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        token = huggingface_token()
         if not token:
             raise RuntimeError(
-                f"{file_spec.get('name', 'This file')} requires HF_TOKEN."
+                f"{file_spec.get('name', 'This file')} requires Hugging Face access."
             )
         headers["Authorization"] = f"Bearer {token}"
     elif auth == "civitai":

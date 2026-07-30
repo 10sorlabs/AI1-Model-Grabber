@@ -6,7 +6,7 @@ on:
       tag:
         description: Docker image tag
         required: true
-        default: "1.0"
+        default: "1.1-token-test"
 
 permissions:
   contents: read
@@ -47,5 +47,11 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ inputs.tag }}
+          build-args: |
+            IMAGE_VERSION=${{ inputs.tag }}
+            HF_TOKEN_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
+            REQUIRE_HF_DOWNLOAD_TOKEN=1
+          secrets: |
+            hf_download_token=${{ secrets.HF_DOWNLOAD_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

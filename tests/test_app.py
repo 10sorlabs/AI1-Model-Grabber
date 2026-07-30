@@ -58,6 +58,28 @@ def test_disabled_workflow_cannot_start() -> None:
         assert response.status_code == 400
 
 
+def test_huggingface_auth_can_use_baked_token_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / "hf_token"
+    token_file.write_text("hf_test_only", encoding="utf-8")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setenv("HF_TOKEN_FILE", str(token_file))
+
+    url, headers = launcher_app.tokenized_request(
+        {
+            "name": "Gated test model",
+            "url": "https://huggingface.co/example/model/resolve/main/model.safetensors",
+            "auth": "huggingface",
+        }
+    )
+
+    assert url.endswith("model.safetensors")
+    assert headers["Authorization"] == "Bearer hf_test_only"
+
+
 def test_frontend_is_served() -> None:
     with TestClient(launcher_app.app) as client:
         response = client.get("/")
