@@ -1,62 +1,344 @@
 {
-  "version": 1,
+  "version": 2,
   "workflows": [
     {
-      "id": "foundation-test",
-      "title": "Foundation Test",
-      "description": "Run a short simulated download to verify the launcher, progress bar and ComfyUI hand-off.",
-      "badge": "DEMO",
-      "accent": "#b8ff5a",
-      "estimated_size": "64 MB simulated",
-      "demo": true,
-      "demo_seconds": 6,
-      "demo_bytes": 67108864,
-      "files": [],
-      "custom_nodes": []
-    },
-    {
-      "id": "workflow-02",
-      "title": "Live Download Test",
-      "description": "Download and verify a real public Tiny-SD LoRA from Hugging Face.",
-      "badge": "LIVE",
-      "accent": "#6e7cff",
-      "estimated_size": "6.6 MB download",
+      "id": "image-generation",
+      "title": "Image Generation",
+      "description": "Install the models and custom nodes required for image generation.",
+      "badge": "READY",
+      "accent": "#5271ff",
+      "estimated_size": "Approx. 19.9 GB",
       "files": [
         {
-          "name": "10sorLabs Tiny-SD test LoRA",
-          "url": "https://huggingface.co/Ishan1000/ghibli_lora/resolve/main/adapter_model.safetensors?download=true",
-          "destination": "models/loras/10sorlabs-e2e-test.safetensors",
-          "size_bytes": 6928568,
-          "sha256": "e5418ae96d8db5a8bf072e4fd83cb9ce7a1de69eb50cf507db2510753a17e899",
+          "name": "Z-Image Turbo",
+          "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+          "destination": "models/diffusion_models/z_image_turbo_bf16.safetensors",
+          "size_bytes": 12309866400,
+          "sha256": "2407613050b809ffdff18a4ac99af83ea6b95443ecebdf80e064a79c825574a6",
+          "auth": "none"
+        },
+        {
+          "name": "Qwen 3 4B text encoder",
+          "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+          "destination": "models/text_encoders/qwen_3_4b.safetensors",
+          "size_bytes": 8044982048,
+          "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a",
+          "auth": "none"
+        },
+        {
+          "name": "Z-Image VAE",
+          "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+          "destination": "models/vae/ae.safetensors",
+          "size_bytes": 335304388,
+          "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+          "auth": "none"
+        },
+        {
+          "name": "Realistic Snapshot LoRA",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/realistic_snapshot_lora.safetensors",
+          "destination": "models/loras/realistic_snapshot_lora.safetensors",
+          "size_bytes": 170127768,
+          "sha256": "182d7f92475b8d7f792203127738d31270403e86e007fdc7792d324a3406e556",
+          "auth": "none"
+        },
+        {
+          "name": "ZIT upscaler",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/zit_upscaler.safetensors",
+          "destination": "models/upscale_models/zit_upscaler.safetensors",
+          "size_bytes": 81689540,
+          "sha256": "009671cec5a384db31052b52e344e5989b0c51a5ad4d25a8c2c629f658754d13",
+          "auth": "none"
+        },
+        {
+          "name": "SAM ViT-B",
+          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/sams/sam_vit_b_01ec64.pth",
+          "destination": "models/sams/sam_vit_b_01ec64.pth",
+          "size_bytes": 375042383,
+          "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+          "auth": "none"
+        },
+        {
+          "name": "Face YOLOv8m",
+          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt",
+          "destination": "models/ultralytics/bbox/face_yolov8m.pt",
+          "size_bytes": 51996128,
+          "sha256": "e3893a92c5c1907136b6cc75404094db767c1e0cfefe1b43e87dad72af2e4c9f",
           "auth": "none"
         }
       ],
-      "custom_nodes": []
+      "custom_nodes": [
+        {
+          "name": "ComfyUI-Impact-Subpack",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git",
+          "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
+          "install_requirements": true
+        },
+        {
+          "name": "RES4LYF",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
+          "ref": "022c873c6d198c67b3312a1804336533a050df18",
+          "install_requirements": true
+        },
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Impact-Pack",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
+          "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+          "install_requirements": true
+        }
+      ]
     },
     {
-      "id": "workflow-03",
-      "title": "Workflow 03",
-      "description": "Model and custom-node manifest will be added next.",
-      "badge": "SOON",
-      "accent": "#ff6eb4",
-      "estimated_size": "Coming soon",
-      "disabled": true
+      "id": "dataset-generator",
+      "title": "Dataset Generator",
+      "description": "Install the model stack and custom nodes required for dataset generation.",
+      "badge": "READY",
+      "accent": "#5271ff",
+      "estimated_size": "Approx. 44.6 GB",
+      "files": [
+        {
+          "name": "Qwen 3 8B text encoder",
+          "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+          "destination": "models/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+          "size_bytes": 8664848742,
+          "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+          "auth": "huggingface"
+        },
+        {
+          "name": "FLUX.2 Klein 9B FP8",
+          "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors",
+          "destination": "models/diffusion_models/flux-2-klein-9b-fp8.safetensors",
+          "size_bytes": 9433061528,
+          "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
+          "auth": "huggingface"
+        },
+        {
+          "name": "FLUX.2 VAE",
+          "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+          "destination": "models/vae/flux2-vae.safetensors",
+          "size_bytes": 336213556,
+          "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+          "auth": "none"
+        },
+        {
+          "name": "Qwen 2512 LoRA",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/QWEN2512_Bigsloppytits_v1_copy_000003000.safetensors",
+          "destination": "models/loras/QWEN2512_Bigsloppytits_v1_copy_000003000.safetensors",
+          "size_bytes": 295146208,
+          "sha256": "21ea0686c37054f85a63870f1a6633f64154e49a202ed6c2bb793486ae5f55f0",
+          "auth": "none"
+        },
+        {
+          "name": "BFS Head LoRA",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/bfs_head_v5_2511_merged_version_rank_16_fp16.safetensors",
+          "destination": "models/loras/bfs_head_v5_2511_merged_version_rank_16_fp16.safetensors",
+          "size_bytes": 307464216,
+          "sha256": "1315a08947e5d6d7c53ea4fc59f272e0d54efd7f2da35999b7d873a7cf4fa89b",
+          "auth": "none"
+        },
+        {
+          "name": "Qwen Rapid AIO",
+          "url": "https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/resolve/main/v23/Qwen-Rapid-AIO-NSFW-v23.safetensors",
+          "destination": "models/checkpoints/Qwen-Rapid-AIO-NSFW-v23.safetensors",
+          "size_bytes": 28431840023,
+          "sha256": "fdb919fc81bea63f13759967fc92c9118142e5c70d4e6795199233a35eefa233",
+          "auth": "none"
+        },
+        {
+          "name": "ZIT upscaler",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/zit_upscaler.safetensors",
+          "destination": "models/upscale_models/zit_upscaler.safetensors",
+          "size_bytes": 81689540,
+          "sha256": "009671cec5a384db31052b52e344e5989b0c51a5ad4d25a8c2c629f658754d13",
+          "auth": "none"
+        },
+        {
+          "name": "SAM ViT-B",
+          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/sams/sam_vit_b_01ec64.pth",
+          "destination": "models/sams/sam_vit_b_01ec64.pth",
+          "size_bytes": 375042383,
+          "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
+          "auth": "none"
+        }
+      ],
+      "custom_nodes": [
+        {
+          "name": "ComfyUI-Impact-Subpack",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git",
+          "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
+          "install_requirements": true
+        },
+        {
+          "name": "RES4LYF",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
+          "ref": "022c873c6d198c67b3312a1804336533a050df18",
+          "install_requirements": true
+        },
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Impact-Pack",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
+          "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+          "install_requirements": true
+        },
+        {
+          "name": "seedvr2_videoupscaler",
+          "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git",
+          "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
+          "install_requirements": true
+        }
+      ]
     },
     {
-      "id": "workflow-04",
-      "title": "Workflow 04",
-      "description": "Model and custom-node manifest will be added next.",
-      "badge": "SOON",
-      "accent": "#5ce1e6",
-      "estimated_size": "Coming soon",
-      "disabled": true
+      "id": "image-edit",
+      "title": "Image Edit",
+      "description": "Install the FLUX.2 Klein model stack and supporting custom nodes.",
+      "badge": "READY",
+      "accent": "#5271ff",
+      "estimated_size": "Approx. 17.8 GB",
+      "files": [
+        {
+          "name": "FLUX.2 VAE",
+          "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+          "destination": "models/vae/flux2-vae.safetensors",
+          "size_bytes": 336213556,
+          "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
+          "auth": "none"
+        },
+        {
+          "name": "Qwen 3 8B text encoder",
+          "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+          "destination": "models/clip/qwen_3_8b_fp8mixed.safetensors",
+          "size_bytes": 8664848742,
+          "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+          "auth": "huggingface"
+        },
+        {
+          "name": "FLUX.2 Klein 9B FP8",
+          "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors",
+          "destination": "models/diffusion_models/flux-2-klein-9b-fp8.safetensors",
+          "size_bytes": 9433061528,
+          "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
+          "auth": "huggingface"
+        },
+        {
+          "name": "BFS Face Swap LoRA",
+          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+          "destination": "models/loras/bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+          "size_bytes": 662729912,
+          "sha256": "70d8aaf332d710b905d5085afaa87c3ef577edffd54ffcfadeb8c47a854f9044",
+          "auth": "none"
+        }
+      ],
+      "custom_nodes": [
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Easy-Use",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
+          "ref": "595e0738a9e3f8d0d9c4d875461b2d2c9e7559c7",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI_LayerStyle",
+          "repo": "https://github.com/chflame163/ComfyUI_LayerStyle.git",
+          "ref": "02acdc50affb84cd24f341d1fc2d3a9134b2ad3d",
+          "install_requirements": true
+        }
+      ]
+    },
+    {
+      "id": "motion-control",
+      "title": "Motion Control",
+      "description": "Install the Wan SCAIL and SAM3 model stack for motion control.",
+      "badge": "READY",
+      "accent": "#5271ff",
+      "estimated_size": "Approx. 26.5 GB",
+      "files": [
+        {
+          "name": "SAM 3.1 Multiplex",
+          "url": "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors",
+          "destination": "models/checkpoints/sam3.1_multiplex_fp16.safetensors",
+          "size_bytes": 1745546848,
+          "sha256": "9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03",
+          "auth": "none"
+        },
+        {
+          "name": "Wan CLIP Vision",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+          "destination": "models/clip_vision/clip_vision_h.safetensors",
+          "size_bytes": 1264219396,
+          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.1 SCAIL 2 FP8",
+          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors",
+          "destination": "models/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors",
+          "size_bytes": 17694586857,
+          "sha256": "11513b4697ecf566de0cb74660c478f301fb6699a62b10369e91a6ed0fd6b083",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.1 VAE",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+          "destination": "models/vae/wan_2.1_vae.safetensors",
+          "size_bytes": 253815318,
+          "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
+          "auth": "none"
+        },
+        {
+          "name": "Wan LightX2V LoRA",
+          "url": "https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/resolve/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+          "destination": "models/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+          "size_bytes": 739472104,
+          "sha256": "8833bd4fd7c8eabebf0bc8ee5cfaf47f4f310ce116928a02c1adf8941dd4b0f1",
+          "auth": "none"
+        },
+        {
+          "name": "UMT5 XXL text encoder",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "destination": "models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "size_bytes": 6735906897,
+          "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+          "auth": "none"
+        }
+      ],
+      "custom_nodes": [
+        {
+          "name": "ComfyUI-SAM3",
+          "repo": "https://github.com/PozzettiAndrea/ComfyUI-SAM3.git",
+          "ref": "de0ff5d2c2ea435d29f800abfa568cffdfb94773",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-VideoHelperSuite",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
+          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+          "install_requirements": true
+        }
+      ]
     },
     {
       "id": "workflow-05",
-      "title": "Workflow 05",
-      "description": "Model and custom-node manifest will be added next.",
+      "title": "More workflows",
+      "description": "Additional installers will be added here.",
       "badge": "SOON",
-      "accent": "#ffad4d",
+      "accent": "#5271ff",
       "estimated_size": "Coming soon",
       "disabled": true
     }

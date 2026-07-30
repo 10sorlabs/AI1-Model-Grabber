@@ -14,8 +14,15 @@ RunPod.
 - A button that routes from the launcher to the matching RunPod ComfyUI proxy.
 - Optional launcher updates from GitHub at container startup.
 
-The current catalog contains one simulated foundation test and four disabled
-placeholders. It does not download any real models yet.
+The current catalog contains four production installers:
+
+- Image Generation (approximately 19.9 GB)
+- Dataset Generator (approximately 44.6 GB)
+- Image Edit (approximately 17.8 GB)
+- Motion Control (approximately 26.5 GB)
+
+The catalog installs only models, supporting files and custom nodes. Product
+workflow JSON files are deliberately not included.
 
 ## RunPod template
 
@@ -24,7 +31,7 @@ Use:
 ```text
 Container image: 10sorllabs/comfyui-workflow-launcher:1.0
 HTTP ports:      3000, 8188, 8888
-Container disk:  large enough for the biggest selected workflow
+Container disk:  at least 60 GB for the largest individual installer
 ```
 
 No persistent volume is required. The public service URLs follow RunPod's normal
@@ -37,6 +44,8 @@ https://POD_ID-8888.proxy.runpod.net
 ```
 
 Set `JUPYTER_PASSWORD` in the RunPod template before exposing JupyterLab.
+Set `HF_TOKEN` when using Dataset Generator or Image Edit, and make sure the
+token's account has accepted the applicable Hugging Face model licenses.
 
 ## Remote UI updates
 
@@ -141,4 +150,3 @@ docker push 10sorllabs/comfyui-workflow-launcher:1.0
 
 Alternatively, run the included GitHub Actions workflow after adding repository
 secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
-

@@ -3,13 +3,11 @@ import hashlib
 import importlib
 import os
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from fastapi.testclient import TestClient
 
 
-os.environ["DEMO_DURATION_OVERRIDE"] = "0.1"
 os.environ["RUNPOD_POD_ID"] = "test-pod"
 
 launcher_app = importlib.import_module("launcher.app")
@@ -25,31 +23,38 @@ def test_health_and_public_catalog() -> None:
         assert response.status_code == 200
         workflows = response.json()["workflows"]
         assert len(workflows) == 5
+        assert sum(not item.get("disabled", False) for item in workflows) == 4
         assert "files" not in workflows[0]
+        assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
 
 
-def test_demo_reaches_complete_and_keeps_comfy_url() -> None:
-    with TestClient(launcher_app.app) as client:
-        response = client.post("/api/install/foundation-test")
-        assert response.status_code == 200
+def test_catalog_contains_installers_but_no_product_workflows() -> None:
+    catalog = launcher_app.load_catalog()
+    enabled = [item for item in catalog["workflows"] if not item.get("disabled")]
 
-        deadline = time.monotonic() + 3
-        status = {}
-        while time.monotonic() < deadline:
-            status = client.get("/api/status").json()
-            if status["status"] == "complete":
-                break
-            time.sleep(0.03)
+    assert [item["id"] for item in enabled] == [
+        "image-generation",
+        "dataset-generator",
+        "image-edit",
+        "motion-control",
+    ]
+    assert all(item["files"] for item in enabled)
+    assert all(item["custom_nodes"] for item in enabled)
 
-        assert status["status"] == "complete"
-        assert status["percent"] == 100
-        assert status["comfy_url"] == "https://test-pod-8188.proxy.runpod.net"
+    for installer in enabled:
+        for file_spec in installer["files"]:
+            destination = file_spec["destination"].lower()
+            assert not destination.endswith(".json")
+            assert "workflow" not in destination
+            assert file_spec["size_bytes"] > 0
+            assert len(file_spec["sha256"]) == 64
+            assert file_spec["auth"] in {"none", "huggingface"}
 
 
 def test_disabled_workflow_cannot_start() -> None:
     with TestClient(launcher_app.app) as client:
-        response = client.post("/api/install/workflow-03")
+        response = client.post("/api/install/workflow-05")
         assert response.status_code == 400
 
 
