@@ -20,6 +20,12 @@ trap shutdown SIGTERM SIGINT EXIT
 export PYTHONPATH="/opt/10sorlabs${PYTHONPATH:+:$PYTHONPATH}"
 cd /workspace/runpod-slim
 
+COMFYUI_VENV="/workspace/runpod-slim/ComfyUI/.venv-cu128"
+if [[ -d "$COMFYUI_VENV" && ! -f "$COMFYUI_VENV/bin/activate" ]]; then
+  echo "Removing an incomplete ComfyUI environment from an interrupted first start..."
+  rm -rf -- "$COMFYUI_VENV"
+fi
+
 echo "Starting stock RunPod ComfyUI services..."
 /usr/local/bin/runpod-base-start.sh &
 BASE_PID=$!
