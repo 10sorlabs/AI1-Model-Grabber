@@ -49,7 +49,7 @@ def test_demo_reaches_complete_and_keeps_comfy_url() -> None:
 
 def test_disabled_workflow_cannot_start() -> None:
     with TestClient(launcher_app.app) as client:
-        response = client.post("/api/install/workflow-02")
+        response = client.post("/api/install/workflow-03")
         assert response.status_code == 400
 
 

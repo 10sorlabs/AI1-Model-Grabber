@@ -16,12 +16,22 @@
     },
     {
       "id": "workflow-02",
-      "title": "Workflow 02",
-      "description": "Model and custom-node manifest will be added next.",
-      "badge": "SOON",
+      "title": "Live Download Test",
+      "description": "Download and verify a real public Tiny-SD LoRA from Hugging Face.",
+      "badge": "LIVE",
       "accent": "#6e7cff",
-      "estimated_size": "Coming soon",
-      "disabled": true
+      "estimated_size": "6.6 MB download",
+      "files": [
+        {
+          "name": "10sorLabs Tiny-SD test LoRA",
+          "url": "https://huggingface.co/Ishan1000/ghibli_lora/resolve/main/adapter_model.safetensors?download=true",
+          "destination": "models/loras/10sorlabs-e2e-test.safetensors",
+          "size_bytes": 6928568,
+          "sha256": "e5418ae96d8db5a8bf072e4fd83cb9ce7a1de69eb50cf507db2510753a17e899",
+          "auth": "none"
+        }
+      ],
+      "custom_nodes": []
     },
     {
       "id": "workflow-03",
@@ -52,4 +62,3 @@
     }
   ]
 }
-
