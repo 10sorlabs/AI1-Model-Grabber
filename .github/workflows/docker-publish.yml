@@ -40,7 +40,6 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/.ghcup
           sudo rm -rf /usr/local/share/boost
-          sudo rm -f /swapfile
           sudo apt-get clean
           docker system prune --all --force
           echo "Disk space after cleanup:"
