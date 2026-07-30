@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Install a complete 10sorLabs ComfyUI workflow with one click."
+    />
+    <title>10sorLabs Model Grabber</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <main class="shell">
+      <header class="hero">
+        <img class="brand-mark" src="/logo.png" alt="10sorLabs" />
+        <p class="eyebrow">10SORLABS MODEL GRABBER</p>
+        <h1>Choose your workflow.</h1>
+        <p class="intro">
+          We’ll collect the models, nodes and files. You’ll land in ComfyUI ready
+          to create.
+        </p>
+      </header>
+
+      <section aria-labelledby="workflow-heading">
+        <div class="section-heading">
+          <h2 id="workflow-heading">Workflows</h2>
+          <span id="catalog-state" class="catalog-state">Loading…</span>
+        </div>
+        <div id="workflow-grid" class="workflow-grid" aria-live="polite"></div>
+      </section>
+
+      <section id="job-panel" class="job-panel" aria-live="polite" hidden>
+        <div class="job-topline">
+          <div>
+            <p id="job-kicker" class="job-kicker">PREPARING</p>
+            <h2 id="job-title">Preparing workflow</h2>
+          </div>
+          <strong id="job-percent" class="job-percent">0%</strong>
+        </div>
+
+        <div
+          class="progress-track"
+          role="progressbar"
+          aria-label="Workflow installation progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+
+        <div class="job-details">
+          <p id="job-message">Preparing workflow…</p>
+          <p id="job-metrics" class="job-metrics"></p>
+        </div>
+
+        <p id="job-error" class="job-error" hidden></p>
+
+        <div class="job-actions">
+          <button id="cancel-button" class="button button-ghost" type="button">
+            Cancel
+          </button>
+          <a id="comfy-button" class="button button-primary" href="#" hidden>
+            TO COMFYUI <span aria-hidden="true">→</span>
+          </a>
+        </div>
+      </section>
+
+      <footer>
+        <span>One image. Any region. Your workflow on demand.</span>
+      </footer>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
+

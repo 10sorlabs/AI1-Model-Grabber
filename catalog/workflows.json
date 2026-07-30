@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "workflows": [
+    {
+      "id": "foundation-test",
+      "title": "Foundation Test",
+      "description": "Run a short simulated download to verify the launcher, progress bar and ComfyUI hand-off.",
+      "badge": "DEMO",
+      "accent": "#b8ff5a",
+      "estimated_size": "64 MB simulated",
+      "demo": true,
+      "demo_seconds": 6,
+      "demo_bytes": 67108864,
+      "files": [],
+      "custom_nodes": []
+    },
+    {
+      "id": "workflow-02",
+      "title": "Workflow 02",
+      "description": "Model and custom-node manifest will be added next.",
+      "badge": "SOON",
+      "accent": "#6e7cff",
+      "estimated_size": "Coming soon",
+      "disabled": true
+    },
+    {
+      "id": "workflow-03",
+      "title": "Workflow 03",
+      "description": "Model and custom-node manifest will be added next.",
+      "badge": "SOON",
+      "accent": "#ff6eb4",
+      "estimated_size": "Coming soon",
+      "disabled": true
+    },
+    {
+      "id": "workflow-04",
+      "title": "Workflow 04",
+      "description": "Model and custom-node manifest will be added next.",
+      "badge": "SOON",
+      "accent": "#5ce1e6",
+      "estimated_size": "Coming soon",
+      "disabled": true
+    },
+    {
+      "id": "workflow-05",
+      "title": "Workflow 05",
+      "description": "Model and custom-node manifest will be added next.",
+      "badge": "SOON",
+      "accent": "#ffad4d",
+      "estimated_size": "Coming soon",
+      "disabled": true
+    }
+  ]
+}
+
