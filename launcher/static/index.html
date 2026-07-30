@@ -11,24 +11,24 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="ambient ambient-one" aria-hidden="true"></div>
-    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="10sorLabs Model Grabber">
+        <img class="brand-mark" src="/logo.png" alt="" />
+        <span>10sorLabs</span>
+      </a>
+      <span class="product-name">Model Grabber</span>
+    </header>
 
     <main class="shell">
-      <header class="hero">
-        <img class="brand-mark" src="/logo.png" alt="10sorLabs" />
-        <p class="eyebrow">10SORLABS MODEL GRABBER</p>
-        <h1>Choose your workflow.</h1>
-        <p class="intro">
-          We’ll collect the models, nodes and files. You’ll land in ComfyUI ready
-          to create.
-        </p>
+      <header class="page-heading">
+        <h1>Select your workflow</h1>
+        <p>Choose a workflow to install its required models and custom nodes.</p>
       </header>
 
-      <section aria-labelledby="workflow-heading">
+      <section class="workflow-section" aria-labelledby="workflow-heading">
         <div class="section-heading">
           <h2 id="workflow-heading">Workflows</h2>
-          <span id="catalog-state" class="catalog-state">Loading…</span>
+          <span id="catalog-state" class="catalog-state">Loading...</span>
         </div>
         <div id="workflow-grid" class="workflow-grid" aria-live="polite"></div>
       </section>
@@ -54,7 +54,7 @@
         </div>
 
         <div class="job-details">
-          <p id="job-message">Preparing workflow…</p>
+          <p id="job-message">Preparing workflow...</p>
           <p id="job-metrics" class="job-metrics"></p>
         </div>
 
@@ -65,17 +65,12 @@
             Cancel
           </button>
           <a id="comfy-button" class="button button-primary" href="#" hidden>
-            TO COMFYUI <span aria-hidden="true">→</span>
+            TO COMFYUI <span aria-hidden="true">&rarr;</span>
           </a>
         </div>
       </section>
-
-      <footer>
-        <span>One image. Any region. Your workflow on demand.</span>
-      </footer>
     </main>
 
     <script src="/app.js" defer></script>
   </body>
 </html>
-

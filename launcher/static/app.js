@@ -55,7 +55,6 @@ function renderWorkflows(isBusy = false) {
       return `
         <button
           class="workflow-card${selected ? " is-selected" : ""}${isBusy ? " is-busy" : ""}"
-          style="--card-accent: ${escapeText(workflow.accent || "#b8ff5a")}"
           type="button"
           data-workflow-id="${escapeText(workflow.id)}"
           ${disabled ? "disabled" : ""}
@@ -214,4 +213,3 @@ async function initialise() {
 }
 
 initialise();
-
