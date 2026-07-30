@@ -17,6 +17,9 @@ shutdown() {
 
 trap shutdown SIGTERM SIGINT EXIT
 
+export PYTHONPATH="/opt/10sorlabs${PYTHONPATH:+:$PYTHONPATH}"
+cd /workspace/runpod-slim
+
 echo "Starting stock RunPod ComfyUI services..."
 /usr/local/bin/runpod-base-start.sh &
 BASE_PID=$!
@@ -26,4 +29,3 @@ python3.12 -m launcher.bootstrap &
 LAUNCHER_PID=$!
 
 wait -n "$BASE_PID" "$LAUNCHER_PID"
-

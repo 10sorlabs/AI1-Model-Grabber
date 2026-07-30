@@ -33,10 +33,11 @@ COPY catalog/ /opt/10sorlabs/catalog/
 COPY docker/entrypoint.sh /start.sh
 RUN chmod +x /start.sh
 
+WORKDIR /workspace/runpod-slim
+
 EXPOSE 3000 8188 8888
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl --fail --silent http://127.0.0.1:3000/api/health || exit 1
 
 ENTRYPOINT ["/start.sh"]
-
