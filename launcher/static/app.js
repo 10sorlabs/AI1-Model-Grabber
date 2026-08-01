@@ -19,6 +19,11 @@ const elements = {
   customQueueState: document.querySelector("#custom-queue-state"),
   downloadedModelList: document.querySelector("#downloaded-model-list"),
   downloadedModelState: document.querySelector("#downloaded-model-state"),
+  nodeDraftList: document.querySelector("#node-draft-list"),
+  nodeQueueList: document.querySelector("#node-queue-list"),
+  customNodeQueueState: document.querySelector("#custom-node-queue-state"),
+  installedNodeList: document.querySelector("#installed-node-list"),
+  installedNodeState: document.querySelector("#installed-node-state"),
 };
 
 const runningStates = new Set(["running"]);
@@ -26,9 +31,12 @@ let workflows = [];
 let activeWorkflowId = null;
 let pollTimer = null;
 let customPollTimer = null;
+let customNodePollTimer = null;
 let modelLocations = [];
 let draftSequence = 0;
 let modelDrafts = [];
+let nodeDraftSequence = 0;
+let nodeDrafts = [];
 
 function escapeText(value) {
   const node = document.createElement("span");
@@ -59,7 +67,8 @@ function comfyUrl(serverUrl) {
 }
 
 function selectView(viewName, updateHash = true) {
-  const selected = viewName === "custom-models" ? "custom-models" : "workflows";
+  const allowedViews = new Set(["workflows", "custom-models", "custom-nodes"]);
+  const selected = allowedViews.has(viewName) ? viewName : "workflows";
   elements.views.forEach((view) => {
     view.hidden = view.dataset.view !== selected;
   });
@@ -67,7 +76,7 @@ function selectView(viewName, updateHash = true) {
     link.classList.toggle("is-active", link.dataset.viewTarget === selected);
   });
   if (updateHash) {
-    window.history.replaceState(null, "", selected === "workflows" ? "#workflows" : "#custom-models");
+    window.history.replaceState(null, "", `#${selected}`);
   }
 }
 
@@ -411,6 +420,140 @@ function beginCustomPolling() {
   }, 700);
 }
 
+function createNodeDraft() {
+  nodeDraftSequence += 1;
+  return {
+    id: `node-draft-${nodeDraftSequence}`,
+    url: "",
+  };
+}
+
+function ensureTrailingNodeDraft() {
+  const last = nodeDrafts.at(-1);
+  if (!last || last.url) {
+    const draft = createNodeDraft();
+    nodeDrafts.push(draft);
+    elements.nodeDraftList.append(createNodeDraftRow(draft));
+  }
+}
+
+function createNodeDraftRow(draft) {
+  const row = document.createElement("div");
+  row.className = "node-draft-row";
+  row.dataset.nodeDraftId = draft.id;
+  row.innerHTML = `
+    <label class="model-field">
+      <span class="sr-only">GitHub repository link</span>
+      <input
+        class="model-input node-url-input"
+        type="url"
+        placeholder="GitHub repository link"
+        autocomplete="off"
+      />
+    </label>
+    <button class="button button-primary download-model-button" type="button" disabled>INSTALL</button>
+    <p class="draft-error" hidden></p>
+  `;
+
+  const urlInput = row.querySelector(".node-url-input");
+  const installButton = row.querySelector(".download-model-button");
+  const error = row.querySelector(".draft-error");
+  urlInput.value = draft.url;
+
+  urlInput.addEventListener("input", () => {
+    draft.url = urlInput.value.trim();
+    installButton.disabled = !draft.url;
+    error.hidden = true;
+    ensureTrailingNodeDraft();
+  });
+
+  installButton.addEventListener("click", async () => {
+    installButton.disabled = true;
+    error.hidden = true;
+    try {
+      await fetchJson("/api/custom-nodes", {
+        method: "POST",
+        body: JSON.stringify({url: draft.url}),
+      });
+      nodeDrafts = nodeDrafts.filter((item) => item.id !== draft.id);
+      row.remove();
+      ensureTrailingNodeDraft();
+      await loadCustomNodes();
+      beginCustomNodePolling();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+      installButton.disabled = false;
+    }
+  });
+
+  return row;
+}
+
+function renderNodeDrafts() {
+  elements.nodeDraftList.innerHTML = "";
+  if (!nodeDrafts.length) nodeDrafts.push(createNodeDraft());
+  nodeDrafts.forEach((draft) => elements.nodeDraftList.append(createNodeDraftRow(draft)));
+  ensureTrailingNodeDraft();
+}
+
+function customNodeMarkup(item) {
+  const percent = Math.max(0, Math.min(100, Number(item.percent || 0)));
+  const path = `custom_nodes/${item.name}`;
+  return `
+    <article class="model-job">
+      <div class="model-job-topline">
+        <div class="model-job-name">
+          <strong title="${escapeText(item.name)}">${escapeText(item.name)}</strong>
+          <span title="${escapeText(path)}">${escapeText(path)} · ${escapeText(item.source_host)}</span>
+        </div>
+        <span class="model-status is-${escapeText(item.status)}">${escapeText(modelStatusLabel(item.status))}</span>
+      </div>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}">
+        <div class="progress-fill" style="width: ${percent}%"></div>
+      </div>
+      <div class="model-job-details">
+        <p>${escapeText(item.message || "")}</p>
+        <p>${item.restart_required ? "RESTART REQUIRED" : ""}</p>
+      </div>
+      ${item.error ? `<p class="model-job-error">${escapeText(item.error)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderCustomNodes(state) {
+  const queue = state.queue || [];
+  const installed = state.downloaded || [];
+  const activeCount = queue.filter((item) => ["queued", "cloning", "installing"].includes(item.status)).length;
+
+  elements.customNodeQueueState.textContent = `${activeCount} queued`;
+  elements.nodeQueueList.innerHTML = queue.map(customNodeMarkup).join("");
+  elements.installedNodeState.textContent = `${installed.length} ${installed.length === 1 ? "node" : "nodes"}`;
+  elements.installedNodeList.innerHTML = installed.length
+    ? installed.map(customNodeMarkup).join("")
+    : '<p class="empty-state">Completed custom nodes will appear here.</p>';
+  return activeCount > 0;
+}
+
+async function loadCustomNodes() {
+  const state = await fetchJson("/api/custom-nodes");
+  const hasActiveInstalls = renderCustomNodes(state);
+  if (!nodeDrafts.length) renderNodeDrafts();
+  return hasActiveInstalls;
+}
+
+function beginCustomNodePolling() {
+  window.clearInterval(customNodePollTimer);
+  customNodePollTimer = window.setInterval(async () => {
+    try {
+      const hasActiveInstalls = await loadCustomNodes();
+      if (!hasActiveInstalls) window.clearInterval(customNodePollTimer);
+    } catch {
+      // Preserve the current queue display during a short proxy interruption.
+    }
+  }, 700);
+}
+
 elements.navLinks.forEach((link) => {
   link.addEventListener("click", () => selectView(link.dataset.viewTarget));
 });
@@ -426,7 +569,10 @@ elements.cancel.addEventListener("click", async () => {
 });
 
 async function initialise() {
-  const initialView = window.location.hash === "#custom-models" ? "custom-models" : "workflows";
+  const requestedView = window.location.hash.replace("#", "");
+  const initialView = ["workflows", "custom-models", "custom-nodes"].includes(requestedView)
+    ? requestedView
+    : "workflows";
   selectView(initialView, false);
   await loadCatalog();
   try {
@@ -434,6 +580,12 @@ async function initialise() {
   } catch {
     renderDrafts();
     elements.customQueueState.textContent = "Queue unavailable";
+  }
+  try {
+    if (await loadCustomNodes()) beginCustomNodePolling();
+  } catch {
+    renderNodeDrafts();
+    elements.customNodeQueueState.textContent = "Queue unavailable";
   }
 
   try {

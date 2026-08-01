@@ -193,6 +193,7 @@ h1 {
 .model-draft-list,
 .model-job-list {
   display: grid;
+  min-width: 0;
   gap: 10px;
 }
 
@@ -200,6 +201,13 @@ h1 {
   display: grid;
   align-items: start;
   grid-template-columns: minmax(0, 1.55fr) minmax(210px, 0.8fr) auto;
+  gap: 9px;
+}
+
+.node-draft-row {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 9px;
 }
 
@@ -257,6 +265,7 @@ h1 {
 }
 
 .model-job {
+  min-width: 0;
   padding: 15px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -311,6 +320,8 @@ h1 {
 }
 
 .model-status.is-downloading,
+.model-status.is-cloning,
+.model-status.is-installing,
 .model-status.is-complete {
   border-color: rgba(82, 113, 255, 0.48);
   color: #8398ff;
@@ -622,6 +633,10 @@ h1 {
   }
 
   .model-draft-row {
+    grid-template-columns: 1fr;
+  }
+
+  .node-draft-row {
     grid-template-columns: 1fr;
   }
 

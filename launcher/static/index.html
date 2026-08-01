@@ -29,6 +29,9 @@
           <button class="sidebar-link" type="button" data-view-target="custom-models">
             Custom models
           </button>
+          <button class="sidebar-link" type="button" data-view-target="custom-nodes">
+            Custom nodes
+          </button>
         </nav>
       </aside>
 
@@ -107,6 +110,32 @@
             </div>
             <div id="downloaded-model-list" class="model-job-list" aria-live="polite">
               <p class="empty-state">Completed downloads will appear here.</p>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-custom-nodes" class="app-view" data-view="custom-nodes" hidden>
+          <header class="page-heading">
+            <h1>Custom nodes</h1>
+            <p>Add GitHub repositories directly to ComfyUI/custom_nodes.</p>
+          </header>
+
+          <section class="model-section" aria-labelledby="node-queue-heading">
+            <div class="section-heading">
+              <h2 id="node-queue-heading">Install queue</h2>
+              <span id="custom-node-queue-state" class="catalog-state">0 queued</span>
+            </div>
+            <div id="node-draft-list" class="model-draft-list"></div>
+            <div id="node-queue-list" class="model-job-list" aria-live="polite"></div>
+          </section>
+
+          <section class="model-section downloaded-section" aria-labelledby="installed-node-heading">
+            <div class="section-heading">
+              <h2 id="installed-node-heading">Installed nodes</h2>
+              <span id="installed-node-state" class="catalog-state">0 nodes</span>
+            </div>
+            <div id="installed-node-list" class="model-job-list" aria-live="polite">
+              <p class="empty-state">Completed custom nodes will appear here.</p>
             </div>
           </section>
         </section>

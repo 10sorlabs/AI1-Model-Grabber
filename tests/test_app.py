@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import importlib
 import os
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,6 +89,8 @@ def test_frontend_is_served() -> None:
         assert "10sorLabs Model Grabber" in response.text
         assert "Custom models" in response.text
         assert "Download queue" in response.text
+        assert "Custom nodes" in response.text
+        assert "Install queue" in response.text
 
         logo = client.get("/logo.png")
         assert logo.status_code == 200
@@ -348,3 +351,121 @@ def test_existing_custom_model_is_moved_to_downloaded_as_found(
     assert snapshot["queue"] == []
     assert snapshot["downloaded"][0]["status"] == "skipped"
     assert destination.read_bytes() == payload
+
+
+def test_custom_node_url_must_be_a_github_repository() -> None:
+    assert (
+        launcher_app.validate_custom_node_url("https://github.com/example/ComfyUI-Test")
+        == "https://github.com/example/ComfyUI-Test.git"
+    )
+
+    for invalid in (
+        "https://example.com/example/ComfyUI-Test",
+        "https://github.com/example/ComfyUI-Test/issues",
+        "http://github.com/example/ComfyUI-Test",
+    ):
+        try:
+            launcher_app.validate_custom_node_url(invalid)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"Invalid custom node URL was accepted: {invalid}")
+
+
+def test_custom_node_queue_is_strictly_sequential(monkeypatch) -> None:
+    controller = launcher_app.CustomNodeController()
+    active = 0
+    maximum_active = 0
+    order: list[str] = []
+
+    async def fake_install(item) -> None:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        order.append(f"start:{item.name}")
+        await asyncio.sleep(0.03)
+        controller.update(item, status="complete", percent=100)
+        order.append(f"end:{item.name}")
+        active -= 1
+
+    monkeypatch.setattr(controller, "_run_item", fake_install)
+
+    async def run_installs() -> None:
+        await controller.enqueue("https://github.com/example/Node-One")
+        await controller.enqueue("https://github.com/example/Node-Two")
+        await controller.enqueue("https://github.com/example/Node-Three")
+        if controller.worker_task:
+            await controller.worker_task
+
+    asyncio.run(run_installs())
+
+    assert maximum_active == 1
+    assert order == [
+        "start:Node-One",
+        "end:Node-One",
+        "start:Node-Two",
+        "end:Node-Two",
+        "start:Node-Three",
+        "end:Node-Three",
+    ]
+
+
+def test_custom_node_clone_requirements_and_existing_detection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "Example-ComfyUI-Node"
+    source.mkdir()
+    (source / "__init__.py").write_text("NODE_CLASS_MAPPINGS = {}\n", encoding="utf-8")
+    (source / "requirements.txt").write_text("# no extra packages\n", encoding="utf-8")
+    subprocess.run(["git", "init", str(source)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(source), "add", "."],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=10sorLabs Test",
+            "-c",
+            "user.email=test@10sorlabs.invalid",
+            "commit",
+            "-m",
+            "Initial node",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    comfy_dir = tmp_path / "ComfyUI"
+    custom_nodes_dir = comfy_dir / "custom_nodes"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(launcher_app, "validate_custom_node_url", lambda url: url)
+
+    controller = launcher_app.CustomNodeController()
+    source_url = source.resolve().as_uri()
+
+    async def install_twice() -> tuple[launcher_app.CustomNodeState, launcher_app.CustomNodeState]:
+        first = await controller.enqueue(source_url)
+        if controller.worker_task:
+            await controller.worker_task
+        second = await controller.enqueue(source_url)
+        if controller.worker_task:
+            await controller.worker_task
+        return controller.items[first["id"]], controller.items[second["id"]]
+
+    first_state, second_state = asyncio.run(install_twice())
+    destination = custom_nodes_dir / "Example-ComfyUI-Node"
+
+    assert first_state.status == "complete"
+    assert first_state.restart_required is True
+    assert second_state.status == "skipped"
+    assert (destination / "__init__.py").exists()
+    assert not list(custom_nodes_dir.glob(".10sorlabs-*.part"))

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -109,6 +110,10 @@ class CustomModelRequest(BaseModel):
     location: str
 
 
+class CustomNodeRequest(BaseModel):
+    url: str
+
+
 @dataclass
 class CustomModelState:
     id: str
@@ -141,6 +146,39 @@ class CustomModelState:
             "bytes_per_second": round(max(0, self.bytes_per_second), 1),
             "percent": round(max(0, min(100, self.percent)), 1),
             "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class CustomNodeState:
+    id: str
+    url: str = field(repr=False)
+    source_host: str = "github.com"
+    name: str = "Resolving repository..."
+    status: str = "queued"
+    message: str = "Waiting in install queue."
+    percent: float = 0
+    error: str | None = None
+    restart_required: bool = False
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    started_at: str | None = None
+    completed_at: str | None = None
+    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def export(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_host": self.source_host,
+            "name": self.name,
+            "status": self.status,
+            "message": self.message,
+            "percent": round(max(0, min(100, self.percent)), 1),
+            "error": self.error,
+            "restart_required": self.restart_required,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
@@ -263,6 +301,40 @@ def response_sha256(response: httpx.Response) -> str:
         if re.fullmatch(r"[a-fA-F0-9]{64}", value):
             return value.lower()
     return ""
+
+
+def validate_custom_node_url(raw_url: str) -> str:
+    url = raw_url.strip().rstrip("/")
+    if not url or len(url) > 2048:
+        raise RuntimeError("Enter a valid GitHub repository link.")
+    parts = urlsplit(url)
+    path_parts = [part for part in parts.path.split("/") if part]
+    if (
+        parts.scheme != "https"
+        or (parts.hostname or "").lower() != "github.com"
+        or len(path_parts) != 2
+    ):
+        raise RuntimeError("Custom nodes must use a GitHub repository link.")
+    owner, repository = path_parts
+    repository = repository.removesuffix(".git")
+    safe_part = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    if not re.fullmatch(safe_part, owner) or not re.fullmatch(safe_part, repository):
+        raise RuntimeError("The GitHub repository link is not valid.")
+    return f"https://github.com/{owner}/{repository}.git"
+
+
+def custom_node_name(url: str) -> str:
+    name = Path(urlsplit(url).path.rstrip("/")).name.removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+        raise RuntimeError("The custom node repository name is not safe.")
+    return name
+
+
+def normalized_git_remote(url: str) -> str:
+    normalized = url.strip().rstrip("/").removesuffix(".git")
+    if normalized.startswith("https://github.com/"):
+        return normalized.lower()
+    return normalized
 
 
 def load_catalog() -> dict[str, Any]:
@@ -586,6 +658,188 @@ class CustomModelController:
                 message="Download failed.",
                 error=str(exc),
                 bytes_per_second=0,
+                completed_at=utc_now(),
+            )
+
+
+class CustomNodeController:
+    def __init__(self) -> None:
+        self.items: dict[str, CustomNodeState] = {}
+        self.pending: deque[str] = deque()
+        self.worker_task: asyncio.Task[None] | None = None
+        self.lock = asyncio.Lock()
+
+    def snapshot(self) -> dict[str, Any]:
+        active_statuses = {"queued", "cloning", "installing", "error"}
+        return {
+            "queue": [
+                item.export()
+                for item in self.items.values()
+                if item.status in active_statuses
+            ],
+            "downloaded": [
+                item.export()
+                for item in reversed(self.items.values())
+                if item.status in {"complete", "skipped"}
+            ],
+        }
+
+    async def enqueue(self, raw_url: str) -> dict[str, Any]:
+        url = validate_custom_node_url(raw_url)
+        item = CustomNodeState(
+            id=uuid4().hex,
+            url=url,
+            source_host=(urlsplit(url).hostname or "github.com").lower(),
+            name=custom_node_name(url),
+        )
+        async with self.lock:
+            self.items[item.id] = item
+            self.pending.append(item.id)
+            if not self.worker_task or self.worker_task.done():
+                self.worker_task = asyncio.create_task(self._drain_queue())
+        return item.export()
+
+    async def _drain_queue(self) -> None:
+        while True:
+            async with self.lock:
+                if not self.pending:
+                    self.worker_task = None
+                    return
+                item_id = self.pending.popleft()
+            await self._run_item(self.items[item_id])
+
+    def update(self, item: CustomNodeState, **changes: Any) -> None:
+        for key, value in changes.items():
+            setattr(item, key, value)
+        item.updated_at = utc_now()
+
+    async def _origin_url(self, destination: Path) -> str:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(destination),
+            "remote",
+            "get-url",
+            "origin",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        output, _ = await process.communicate()
+        if process.returncode:
+            return ""
+        return output.decode(errors="replace").strip()
+
+    async def _run_item(self, item: CustomNodeState) -> None:
+        staging: Path | None = None
+        try:
+            if not COMFYUI_DIR.exists():
+                raise RuntimeError("ComfyUI is not ready yet.")
+
+            CUSTOM_NODES_DIR.mkdir(parents=True, exist_ok=True)
+            destination = (CUSTOM_NODES_DIR / item.name).resolve()
+            if not destination.is_relative_to(CUSTOM_NODES_DIR.resolve()):
+                raise RuntimeError("The custom node destination is not safe.")
+
+            self.update(
+                item,
+                status="cloning",
+                message=f"Checking {item.name}...",
+                percent=5,
+                started_at=utc_now(),
+                error=None,
+            )
+
+            if destination.exists():
+                existing_origin = await self._origin_url(destination)
+                if existing_origin and normalized_git_remote(existing_origin) == normalized_git_remote(item.url):
+                    self.update(
+                        item,
+                        status="skipped",
+                        message="Custom node already found — install skipped.",
+                        percent=100,
+                        completed_at=utc_now(),
+                    )
+                    return
+                raise RuntimeError(
+                    f"A folder named {item.name} already exists but does not match this repository."
+                )
+
+            staging = (CUSTOM_NODES_DIR / f".10sorlabs-{item.id}.part").resolve()
+            if not staging.is_relative_to(CUSTOM_NODES_DIR.resolve()):
+                raise RuntimeError("The temporary custom node path is not safe.")
+            shutil.rmtree(staging, ignore_errors=True)
+
+            self.update(
+                item,
+                message=f"Cloning {item.name}...",
+                percent=12,
+            )
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--single-branch",
+                item.url,
+                str(staging),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            output, _ = await process.communicate()
+            if process.returncode:
+                raise RuntimeError(
+                    "Git could not clone this custom node: "
+                    f"{output.decode(errors='replace')[-500:]}"
+                )
+
+            self.update(item, percent=74, message="Repository cloned.")
+            requirements = staging / "requirements.txt"
+            if requirements.is_file():
+                self.update(
+                    item,
+                    status="installing",
+                    message="Installing Python requirements...",
+                    percent=82,
+                )
+                python = COMFYUI_VENV / "bin" / "python"
+                if not python.exists():
+                    python = Path(sys.executable)
+                process = await asyncio.create_subprocess_exec(
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    str(requirements),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                output, _ = await process.communicate()
+                if process.returncode:
+                    raise RuntimeError(
+                        "Custom node requirements failed: "
+                        f"{output.decode(errors='replace')[-500:]}"
+                    )
+                self.update(item, percent=96, message="Requirements installed.")
+
+            os.replace(staging, destination)
+            staging = None
+            self.update(
+                item,
+                status="complete",
+                message="Custom node installed. Restart ComfyUI to load it.",
+                percent=100,
+                restart_required=True,
+                completed_at=utc_now(),
+            )
+        except Exception as exc:
+            if staging:
+                shutil.rmtree(staging, ignore_errors=True)
+            self.update(
+                item,
+                status="error",
+                message="Custom node installation failed.",
+                error=str(exc),
+                percent=0,
                 completed_at=utc_now(),
             )
 
@@ -954,6 +1208,7 @@ class JobController:
 
 controller = JobController()
 custom_model_controller = CustomModelController()
+custom_node_controller = CustomNodeController()
 app = FastAPI(
     title="10sorLabs Model Grabber",
     version="1.1.0",
@@ -1010,6 +1265,19 @@ async def custom_models() -> dict[str, Any]:
 async def add_custom_model(request: CustomModelRequest) -> dict[str, Any]:
     try:
         return await custom_model_controller.enqueue(request.url, request.location)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/custom-nodes")
+async def custom_nodes() -> dict[str, Any]:
+    return custom_node_controller.snapshot()
+
+
+@app.post("/api/custom-nodes")
+async def add_custom_node(request: CustomNodeRequest) -> dict[str, Any]:
+    try:
+        return await custom_node_controller.enqueue(request.url)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

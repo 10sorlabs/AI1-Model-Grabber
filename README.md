@@ -36,6 +36,18 @@ start from scratch: an existing `.part` file is removed before the request. A
 complete model with the same filename and recognized size/checksum is skipped
 and shown under **Downloaded models** instead of being overwritten.
 
+## Custom nodes
+
+The **Custom nodes** section accepts GitHub repository links and processes every
+click through one serial install queue. Repositories are cloned into a temporary
+folder, their `requirements.txt` is installed with ComfyUI's Python environment,
+and the completed folder is then moved into `ComfyUI/custom_nodes`.
+
+An existing checkout with the same Git origin is shown as already found. Failed
+clones or dependency installs remove their temporary folder instead of leaving
+an incomplete custom node behind. Newly installed nodes require a ComfyUI
+restart before they become available.
+
 ## RunPod template
 
 Use:
