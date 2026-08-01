@@ -11,6 +11,7 @@ RunPod.
 - 10sorLabs Model Grabber on port `3000`.
 - Resumable `.part` downloads with visible progress.
 - Workflow and custom-node installation from a declarative JSON catalog.
+- A Custom Models queue for direct downloads into any ComfyUI model folder.
 - A button that routes from the launcher to the matching RunPod ComfyUI proxy.
 - Optional launcher updates from GitHub at container startup.
 
@@ -23,6 +24,17 @@ The current catalog contains four production installers:
 
 The catalog installs only models, supporting files and custom nodes. Product
 workflow JSON files are deliberately not included.
+
+## Custom models
+
+The **Custom models** section accepts a direct HTTP(S) model link and a target
+folder inside `ComfyUI/models`. It includes ComfyUI's standard model locations,
+discovers existing folders on the pod and can create a new custom subfolder.
+
+Every click adds one download to a single serial queue. Custom downloads always
+start from scratch: an existing `.part` file is removed before the request. A
+complete model with the same filename and recognized size/checksum is skipped
+and shown under **Downloaded models** instead of being overwritten.
 
 ## RunPod template
 

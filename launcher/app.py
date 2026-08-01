@@ -7,16 +7,19 @@ import os
 import re
 import shutil
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 
 SOURCE_ROOT = Path(
@@ -32,6 +35,39 @@ COMFYUI_DIR = Path(
 CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
+
+# Current built-in model locations from ComfyUI's folder_paths.py, plus the two
+# legacy physical directories that ComfyUI still searches for compatible files.
+DEFAULT_MODEL_FOLDERS = (
+    "checkpoints",
+    "diffusion_models",
+    "unet",
+    "text_encoders",
+    "clip",
+    "clip_vision",
+    "loras",
+    "vae",
+    "vae_approx",
+    "controlnet",
+    "upscale_models",
+    "latent_upscale_models",
+    "embeddings",
+    "style_models",
+    "model_patches",
+    "audio_encoders",
+    "background_removal",
+    "frame_interpolation",
+    "geometry_estimation",
+    "optical_flow",
+    "detection",
+    "classifiers",
+    "photomaker",
+    "gligen",
+    "hypernetworks",
+    "diffusers",
+    "configs",
+    "datasets",
+)
 
 
 class InstallCancelled(Exception):
@@ -68,8 +104,165 @@ class JobState:
         return result
 
 
+class CustomModelRequest(BaseModel):
+    url: str
+    location: str
+
+
+@dataclass
+class CustomModelState:
+    id: str
+    url: str = field(repr=False)
+    source_host: str = ""
+    location: str = ""
+    filename: str = "Resolving filename..."
+    status: str = "queued"
+    message: str = "Waiting in download queue."
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    bytes_per_second: float = 0
+    percent: float = 0
+    error: str | None = None
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    started_at: str | None = None
+    completed_at: str | None = None
+    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def export(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_host": self.source_host,
+            "location": self.location,
+            "filename": self.filename,
+            "status": self.status,
+            "message": self.message,
+            "downloaded_bytes": self.downloaded_bytes,
+            "total_bytes": self.total_bytes,
+            "bytes_per_second": round(max(0, self.bytes_per_second), 1),
+            "percent": round(max(0, min(100, self.percent)), 1),
+            "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "updated_at": self.updated_at,
+        }
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def validate_custom_model_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if not url or len(url) > 8192:
+        raise RuntimeError("Enter a valid model download URL.")
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise RuntimeError("Model links must use http:// or https://.")
+    return url
+
+
+def validate_model_location(raw_location: str) -> tuple[str, Path]:
+    location = raw_location.strip().replace("\\", "/").strip("/")
+    if not location or len(location) > 180:
+        raise RuntimeError("Choose a valid model location.")
+
+    relative = PurePosixPath(location)
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise RuntimeError("The custom model location is not safe.")
+    if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]*", part) for part in relative.parts):
+        raise RuntimeError(
+            "Folder names may contain letters, numbers, spaces, dots, dashes and underscores."
+        )
+
+    models_dir = (COMFYUI_DIR / "models").resolve()
+    destination = (models_dir / Path(*relative.parts)).resolve()
+    if not destination.is_relative_to(models_dir):
+        raise RuntimeError("The model location must stay inside ComfyUI/models.")
+    return relative.as_posix(), destination
+
+
+def available_model_locations() -> list[str]:
+    locations = list(DEFAULT_MODEL_FOLDERS)
+    models_dir = COMFYUI_DIR / "models"
+    if models_dir.is_dir():
+        for root, directories, _files in os.walk(models_dir, followlinks=False):
+            directories[:] = [name for name in directories if not name.startswith(".")]
+            root_path = Path(root)
+            for name in directories:
+                path = root_path / name
+                try:
+                    relative = path.relative_to(models_dir).as_posix()
+                    validate_model_location(relative)
+                except (ValueError, RuntimeError):
+                    continue
+                if relative not in locations:
+                    locations.append(relative)
+    return locations
+
+
+def safe_download_filename(raw_name: str) -> str:
+    name = unquote(raw_name).replace("\\", "/").rsplit("/", 1)[-1].strip()
+    name = name.strip('"\'')
+    if not name or name in {".", ".."} or "\x00" in name:
+        return "model-download"
+    if len(name) > 240:
+        suffix = Path(name).suffix[:20]
+        name = f"{Path(name).stem[: 240 - len(suffix)]}{suffix}"
+    return name
+
+
+def filename_from_url(url: str) -> str:
+    parts = urlsplit(url)
+    candidate = Path(parts.path).name
+    if not candidate:
+        candidate = f"model-{uuid4().hex[:8]}"
+    return safe_download_filename(candidate)
+
+
+def filename_from_response(response: httpx.Response, fallback: str) -> str:
+    disposition = response.headers.get("content-disposition", "")
+    extended = re.search(r"filename\*\s*=\s*UTF-8''([^;]+)", disposition, re.IGNORECASE)
+    regular = re.search(r'filename\s*=\s*"?([^";]+)', disposition, re.IGNORECASE)
+    if extended:
+        return safe_download_filename(extended.group(1))
+    if regular:
+        return safe_download_filename(regular.group(1))
+
+    redirected = filename_from_url(str(response.url))
+    generic = {"download", "models", "resolve", "main", "model-download"}
+    if redirected.lower() not in generic:
+        return redirected
+    return safe_download_filename(fallback)
+
+
+def custom_download_request(url: str) -> tuple[str, dict[str, str]]:
+    parts = urlsplit(url)
+    hostname = (parts.hostname or "").lower()
+    headers = {"User-Agent": "10sorLabs-Model-Grabber/1.1"}
+
+    if hostname == "huggingface.co" or hostname.endswith(".huggingface.co"):
+        token = huggingface_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    elif hostname == "civitai.com" or hostname.endswith(".civitai.com"):
+        token = (os.getenv("CIVITAI_TOKEN") or os.getenv("CIVITAI_API_TOKEN") or "").strip()
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        if token and "token" not in query:
+            query["token"] = token
+            url = urlunsplit(
+                (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+            )
+
+    return url, headers
+
+
+def response_sha256(response: httpx.Response) -> str:
+    for header in ("x-linked-etag", "x-checksum-sha256", "x-amz-checksum-sha256"):
+        value = response.headers.get(header, "").strip().strip('"')
+        if re.fullmatch(r"[a-fA-F0-9]{64}", value):
+            return value.lower()
+    return ""
 
 
 def load_catalog() -> dict[str, Any]:
@@ -199,6 +392,202 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+class CustomModelController:
+    def __init__(self) -> None:
+        self.items: dict[str, CustomModelState] = {}
+        self.pending: deque[str] = deque()
+        self.worker_task: asyncio.Task[None] | None = None
+        self.lock = asyncio.Lock()
+
+    def snapshot(self) -> dict[str, Any]:
+        active_statuses = {"queued", "downloading", "error"}
+        queue = [
+            item.export()
+            for item in self.items.values()
+            if item.status in active_statuses
+        ]
+        downloaded = [
+            item.export()
+            for item in reversed(self.items.values())
+            if item.status in {"complete", "skipped"}
+        ]
+        return {
+            "locations": available_model_locations(),
+            "queue": queue,
+            "downloaded": downloaded,
+        }
+
+    async def enqueue(self, raw_url: str, raw_location: str) -> dict[str, Any]:
+        url = validate_custom_model_url(raw_url)
+        location, _destination = validate_model_location(raw_location)
+        item = CustomModelState(
+            id=uuid4().hex,
+            url=url,
+            source_host=(urlsplit(url).hostname or "download").lower(),
+            location=location,
+            filename=filename_from_url(url),
+        )
+
+        async with self.lock:
+            self.items[item.id] = item
+            self.pending.append(item.id)
+            if not self.worker_task or self.worker_task.done():
+                self.worker_task = asyncio.create_task(self._drain_queue())
+        return item.export()
+
+    async def _drain_queue(self) -> None:
+        while True:
+            async with self.lock:
+                if not self.pending:
+                    self.worker_task = None
+                    return
+                item_id = self.pending.popleft()
+            item = self.items[item_id]
+            await self._run_item(item)
+
+    def update(self, item: CustomModelState, **changes: Any) -> None:
+        for key, value in changes.items():
+            setattr(item, key, value)
+        item.updated_at = utc_now()
+
+    async def _run_item(self, item: CustomModelState) -> None:
+        partial: Path | None = None
+        try:
+            if not COMFYUI_DIR.exists():
+                raise RuntimeError("ComfyUI is not ready yet.")
+
+            location, folder = validate_model_location(item.location)
+            folder.mkdir(parents=True, exist_ok=True)
+            self.update(
+                item,
+                status="downloading",
+                message="Connecting to the model host...",
+                started_at=utc_now(),
+                error=None,
+            )
+
+            url, headers = custom_download_request(item.url)
+            timeout = httpx.Timeout(connect=30, read=None, write=30, pool=30)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+                async with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code in {401, 403}:
+                        raise RuntimeError("Access denied by the model host.")
+                    if response.is_error:
+                        raise RuntimeError(
+                            f"Download failed (HTTP {response.status_code})."
+                        )
+
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "text/html" in content_type:
+                        raise RuntimeError(
+                            "The link returned a web page instead of a model file."
+                        )
+
+                    filename = filename_from_response(response, item.filename)
+                    destination = (folder / filename).resolve()
+                    if not destination.is_relative_to(folder.resolve()):
+                        raise RuntimeError("The download filename is not safe.")
+
+                    partial = destination.with_name(f"{destination.name}.part")
+                    partial.unlink(missing_ok=True)
+
+                    total = int(response.headers.get("content-length", "0") or 0)
+                    linked_size = int(response.headers.get("x-linked-size", "0") or 0)
+                    if linked_size > 0:
+                        total = linked_size
+                    remote_sha = response_sha256(response)
+
+                    self.update(
+                        item,
+                        location=location,
+                        filename=filename,
+                        total_bytes=total,
+                        message=f"Checking {filename}...",
+                    )
+
+                    if destination.is_file() and destination.stat().st_size > 0:
+                        same_size = total > 0 and destination.stat().st_size == total
+                        same_hash = False
+                        if same_size and remote_sha:
+                            same_hash = (
+                                await asyncio.to_thread(file_sha256, destination)
+                                == remote_sha
+                            )
+                        if same_size and (same_hash or not remote_sha):
+                            self.update(
+                                item,
+                                status="skipped",
+                                message="Model already found — download skipped.",
+                                downloaded_bytes=destination.stat().st_size,
+                                total_bytes=destination.stat().st_size,
+                                bytes_per_second=0,
+                                percent=100,
+                                completed_at=utc_now(),
+                            )
+                            return
+
+                    started = time.monotonic()
+                    downloaded = 0
+                    self.update(item, message=f"Downloading {filename}...")
+                    with partial.open("wb") as handle:
+                        async for chunk in response.aiter_bytes(1024 * 1024):
+                            handle.write(chunk)
+                            downloaded += len(chunk)
+                            elapsed = max(time.monotonic() - started, 0.01)
+                            percent = (downloaded / total * 100) if total else 0
+                            self.update(
+                                item,
+                                downloaded_bytes=downloaded,
+                                bytes_per_second=downloaded / elapsed,
+                                percent=percent,
+                            )
+
+            if not partial or not partial.exists():
+                raise RuntimeError("The model host returned no file data.")
+            if item.total_bytes and partial.stat().st_size != item.total_bytes:
+                raise RuntimeError("The downloaded file has an unexpected size.")
+
+            if remote_sha:
+                self.update(item, message=f"Verifying {item.filename}...", bytes_per_second=0)
+                actual_sha = await asyncio.to_thread(file_sha256, partial)
+                if actual_sha != remote_sha:
+                    raise RuntimeError("The downloaded file failed checksum verification.")
+
+            os.replace(partial, destination)
+            self.update(
+                item,
+                status="complete",
+                message="Download complete.",
+                downloaded_bytes=destination.stat().st_size,
+                total_bytes=destination.stat().st_size,
+                bytes_per_second=0,
+                percent=100,
+                completed_at=utc_now(),
+            )
+        except httpx.RequestError as exc:
+            if partial:
+                partial.unlink(missing_ok=True)
+            self.update(
+                item,
+                status="error",
+                message="Download failed.",
+                error=f"Network error ({type(exc).__name__}).",
+                bytes_per_second=0,
+                completed_at=utc_now(),
+            )
+        except Exception as exc:
+            if partial:
+                partial.unlink(missing_ok=True)
+            self.update(
+                item,
+                status="error",
+                message="Download failed.",
+                error=str(exc),
+                bytes_per_second=0,
+                completed_at=utc_now(),
+            )
 
 
 class JobController:
@@ -564,9 +953,10 @@ class JobController:
 
 
 controller = JobController()
+custom_model_controller = CustomModelController()
 app = FastAPI(
     title="10sorLabs Model Grabber",
-    version="1.0.0",
+    version="1.1.0",
     docs_url=None,
     redoc_url=None,
 )
@@ -609,6 +999,19 @@ async def install(workflow_id: str) -> dict[str, Any]:
 @app.post("/api/cancel")
 async def cancel() -> dict[str, Any]:
     return await controller.cancel()
+
+
+@app.get("/api/custom-models")
+async def custom_models() -> dict[str, Any]:
+    return custom_model_controller.snapshot()
+
+
+@app.post("/api/custom-models")
+async def add_custom_model(request: CustomModelRequest) -> dict[str, Any]:
+    try:
+        return await custom_model_controller.enqueue(request.url, request.location)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/favicon.ico", include_in_schema=False)

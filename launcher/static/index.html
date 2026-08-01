@@ -19,57 +19,99 @@
       <span class="product-name">Model Grabber</span>
     </header>
 
-    <main class="shell">
-      <header class="page-heading">
-        <h1>Select your workflow</h1>
-        <p>Choose a workflow to install its required models and custom nodes.</p>
-      </header>
-
-      <section class="workflow-section" aria-labelledby="workflow-heading">
-        <div class="section-heading">
-          <h2 id="workflow-heading">Workflows</h2>
-          <span id="catalog-state" class="catalog-state">Loading...</span>
-        </div>
-        <div id="workflow-grid" class="workflow-grid" aria-live="polite"></div>
-      </section>
-
-      <section id="job-panel" class="job-panel" aria-live="polite" hidden>
-        <div class="job-topline">
-          <div>
-            <p id="job-kicker" class="job-kicker">PREPARING</p>
-            <h2 id="job-title">Preparing workflow</h2>
-          </div>
-          <strong id="job-percent" class="job-percent">0%</strong>
-        </div>
-
-        <div
-          class="progress-track"
-          role="progressbar"
-          aria-label="Workflow installation progress"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow="0"
-        >
-          <div id="progress-fill" class="progress-fill"></div>
-        </div>
-
-        <div class="job-details">
-          <p id="job-message">Preparing workflow...</p>
-          <p id="job-metrics" class="job-metrics"></p>
-        </div>
-
-        <p id="job-error" class="job-error" hidden></p>
-
-        <div class="job-actions">
-          <button id="cancel-button" class="button button-ghost" type="button">
-            Cancel
+    <div class="app-layout">
+      <aside class="sidebar" aria-label="Model Grabber sections">
+        <p class="sidebar-label">MENU</p>
+        <nav class="sidebar-nav">
+          <button class="sidebar-link is-active" type="button" data-view-target="workflows">
+            Workflows
           </button>
-          <a id="comfy-button" class="button button-primary" href="#" hidden>
-            TO COMFYUI <span aria-hidden="true">&rarr;</span>
-          </a>
-        </div>
-      </section>
-    </main>
+          <button class="sidebar-link" type="button" data-view-target="custom-models">
+            Custom models
+          </button>
+        </nav>
+      </aside>
+
+      <main class="shell">
+        <section id="view-workflows" class="app-view" data-view="workflows">
+          <header class="page-heading">
+            <h1>Select your workflow</h1>
+            <p>Choose a workflow to install its required models and custom nodes.</p>
+          </header>
+
+          <section class="workflow-section" aria-labelledby="workflow-heading">
+            <div class="section-heading">
+              <h2 id="workflow-heading">Workflows</h2>
+              <span id="catalog-state" class="catalog-state">Loading...</span>
+            </div>
+            <div id="workflow-grid" class="workflow-grid" aria-live="polite"></div>
+          </section>
+
+          <section id="job-panel" class="job-panel" aria-live="polite" hidden>
+            <div class="job-topline">
+              <div>
+                <p id="job-kicker" class="job-kicker">PREPARING</p>
+                <h2 id="job-title">Preparing workflow</h2>
+              </div>
+              <strong id="job-percent" class="job-percent">0%</strong>
+            </div>
+
+            <div
+              class="progress-track"
+              role="progressbar"
+              aria-label="Workflow installation progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+
+            <div class="job-details">
+              <p id="job-message">Preparing workflow...</p>
+              <p id="job-metrics" class="job-metrics"></p>
+            </div>
+
+            <p id="job-error" class="job-error" hidden></p>
+
+            <div class="job-actions">
+              <button id="cancel-button" class="button button-ghost" type="button">
+                Cancel
+              </button>
+              <a id="comfy-button" class="button button-primary" href="#" hidden>
+                TO COMFYUI <span aria-hidden="true">&rarr;</span>
+              </a>
+            </div>
+          </section>
+        </section>
+
+        <section id="view-custom-models" class="app-view" data-view="custom-models" hidden>
+          <header class="page-heading">
+            <h1>Custom models</h1>
+            <p>Add direct model links to any folder inside ComfyUI/models.</p>
+          </header>
+
+          <section class="model-section" aria-labelledby="queue-heading">
+            <div class="section-heading">
+              <h2 id="queue-heading">Download queue</h2>
+              <span id="custom-queue-state" class="catalog-state">0 queued</span>
+            </div>
+            <div id="model-draft-list" class="model-draft-list"></div>
+            <div id="model-queue-list" class="model-job-list" aria-live="polite"></div>
+          </section>
+
+          <section class="model-section downloaded-section" aria-labelledby="downloaded-heading">
+            <div class="section-heading">
+              <h2 id="downloaded-heading">Downloaded models</h2>
+              <span id="downloaded-model-state" class="catalog-state">0 models</span>
+            </div>
+            <div id="downloaded-model-list" class="model-job-list" aria-live="polite">
+              <p class="empty-state">Completed downloads will appear here.</p>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
 
     <script src="/app.js" defer></script>
   </body>

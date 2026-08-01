@@ -1,23 +1,34 @@
 const elements = {
+  navLinks: [...document.querySelectorAll("[data-view-target]")],
+  views: [...document.querySelectorAll("[data-view]")],
   catalogState: document.querySelector("#catalog-state"),
   grid: document.querySelector("#workflow-grid"),
   panel: document.querySelector("#job-panel"),
   kicker: document.querySelector("#job-kicker"),
   title: document.querySelector("#job-title"),
   percent: document.querySelector("#job-percent"),
-  track: document.querySelector(".progress-track"),
+  track: document.querySelector("#job-panel .progress-track"),
   fill: document.querySelector("#progress-fill"),
   message: document.querySelector("#job-message"),
   metrics: document.querySelector("#job-metrics"),
   error: document.querySelector("#job-error"),
   cancel: document.querySelector("#cancel-button"),
   comfy: document.querySelector("#comfy-button"),
+  modelDraftList: document.querySelector("#model-draft-list"),
+  modelQueueList: document.querySelector("#model-queue-list"),
+  customQueueState: document.querySelector("#custom-queue-state"),
+  downloadedModelList: document.querySelector("#downloaded-model-list"),
+  downloadedModelState: document.querySelector("#downloaded-model-state"),
 };
 
 const runningStates = new Set(["running"]);
 let workflows = [];
 let activeWorkflowId = null;
 let pollTimer = null;
+let customPollTimer = null;
+let modelLocations = [];
+let draftSequence = 0;
+let modelDrafts = [];
 
 function escapeText(value) {
   const node = document.createElement("span");
@@ -45,6 +56,19 @@ function comfyUrl(serverUrl) {
     return `https://${proxyMatch[1]}-8188.proxy.runpod.net`;
   }
   return `${window.location.protocol}//${host}:8188`;
+}
+
+function selectView(viewName, updateHash = true) {
+  const selected = viewName === "custom-models" ? "custom-models" : "workflows";
+  elements.views.forEach((view) => {
+    view.hidden = view.dataset.view !== selected;
+  });
+  elements.navLinks.forEach((link) => {
+    link.classList.toggle("is-active", link.dataset.viewTarget === selected);
+  });
+  if (updateHash) {
+    window.history.replaceState(null, "", selected === "workflows" ? "#workflows" : "#custom-models");
+  }
 }
 
 function renderWorkflows(isBusy = false) {
@@ -188,6 +212,209 @@ async function pollStatus() {
   }
 }
 
+function createDraft() {
+  draftSequence += 1;
+  return {
+    id: `draft-${draftSequence}`,
+    url: "",
+    location: "",
+    customFolder: "",
+  };
+}
+
+function locationLabel(location) {
+  return location
+    .split("/")
+    .map((part) => part.replaceAll("_", " "))
+    .join(" / ");
+}
+
+function locationOptions(selected) {
+  const standard = modelLocations
+    .map((location) => `
+      <option value="${escapeText(location)}" ${selected === location ? "selected" : ""}>
+        ${escapeText(locationLabel(location))}
+      </option>
+    `)
+    .join("");
+  return `
+    <option value="">Model location</option>
+    ${standard}
+    <option value="__custom__" ${selected === "__custom__" ? "selected" : ""}>+ Create custom folder</option>
+  `;
+}
+
+function resolvedDraftLocation(draft) {
+  return draft.location === "__custom__" ? draft.customFolder.trim() : draft.location;
+}
+
+function ensureTrailingDraft() {
+  const last = modelDrafts.at(-1);
+  if (!last || last.url || last.location || last.customFolder) {
+    const draft = createDraft();
+    modelDrafts.push(draft);
+    elements.modelDraftList.append(createDraftRow(draft));
+  }
+}
+
+function createDraftRow(draft) {
+  const row = document.createElement("div");
+  row.className = "model-draft-row";
+  row.dataset.draftId = draft.id;
+  row.innerHTML = `
+    <label class="model-field">
+      <span class="sr-only">Model link</span>
+      <input class="model-input model-url-input" type="url" placeholder="Model link" autocomplete="off" />
+    </label>
+    <label class="model-field">
+      <span class="sr-only">Model location</span>
+      <select class="model-select model-location-select">${locationOptions(draft.location)}</select>
+      <input
+        class="model-input custom-folder-input"
+        type="text"
+        placeholder="Custom folder, e.g. sams"
+        autocomplete="off"
+        ${draft.location === "__custom__" ? "" : "hidden"}
+      />
+    </label>
+    <button class="button button-primary download-model-button" type="button" disabled>DOWNLOAD</button>
+    <p class="draft-error" hidden></p>
+  `;
+
+  const urlInput = row.querySelector(".model-url-input");
+  const locationSelect = row.querySelector(".model-location-select");
+  const customFolderInput = row.querySelector(".custom-folder-input");
+  const downloadButton = row.querySelector(".download-model-button");
+  const error = row.querySelector(".draft-error");
+  urlInput.value = draft.url;
+  customFolderInput.value = draft.customFolder;
+
+  function syncDraft() {
+    draft.url = urlInput.value.trim();
+    draft.location = locationSelect.value;
+    draft.customFolder = customFolderInput.value;
+    customFolderInput.hidden = draft.location !== "__custom__";
+    downloadButton.disabled = !(draft.url && resolvedDraftLocation(draft));
+    error.hidden = true;
+    ensureTrailingDraft();
+  }
+
+  urlInput.addEventListener("input", syncDraft);
+  locationSelect.addEventListener("change", () => {
+    syncDraft();
+    if (draft.location === "__custom__") customFolderInput.focus();
+  });
+  customFolderInput.addEventListener("input", syncDraft);
+  downloadButton.addEventListener("click", async () => {
+    downloadButton.disabled = true;
+    error.hidden = true;
+    try {
+      await fetchJson("/api/custom-models", {
+        method: "POST",
+        body: JSON.stringify({
+          url: draft.url,
+          location: resolvedDraftLocation(draft),
+        }),
+      });
+      modelDrafts = modelDrafts.filter((item) => item.id !== draft.id);
+      row.remove();
+      ensureTrailingDraft();
+      await loadCustomModels();
+      beginCustomPolling();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+      downloadButton.disabled = false;
+    }
+  });
+
+  return row;
+}
+
+function renderDrafts() {
+  elements.modelDraftList.innerHTML = "";
+  if (!modelDrafts.length) modelDrafts.push(createDraft());
+  modelDrafts.forEach((draft) => elements.modelDraftList.append(createDraftRow(draft)));
+  ensureTrailingDraft();
+}
+
+function modelStatusLabel(status) {
+  if (status === "skipped") return "FOUND";
+  return String(status || "queued").toUpperCase();
+}
+
+function modelJobMarkup(item) {
+  const percent = Math.max(0, Math.min(100, Number(item.percent || 0)));
+  const metrics = [];
+  if (item.downloaded_bytes || item.total_bytes) {
+    const downloaded = formatBytes(Number(item.downloaded_bytes || 0));
+    const total = formatBytes(Number(item.total_bytes || 0));
+    metrics.push(total ? `${downloaded} / ${total}` : downloaded);
+  }
+  if (item.bytes_per_second > 0) {
+    metrics.push(`${formatBytes(Number(item.bytes_per_second))}/s`);
+  }
+  const path = `models/${item.location}/${item.filename}`;
+  return `
+    <article class="model-job">
+      <div class="model-job-topline">
+        <div class="model-job-name">
+          <strong title="${escapeText(item.filename)}">${escapeText(item.filename)}</strong>
+          <span title="${escapeText(path)}">${escapeText(path)} · ${escapeText(item.source_host)}</span>
+        </div>
+        <span class="model-status is-${escapeText(item.status)}">${escapeText(modelStatusLabel(item.status))}</span>
+      </div>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}">
+        <div class="progress-fill" style="width: ${percent}%"></div>
+      </div>
+      <div class="model-job-details">
+        <p>${escapeText(item.message || "")}</p>
+        <p>${escapeText(metrics.join(" · "))}</p>
+      </div>
+      ${item.error ? `<p class="model-job-error">${escapeText(item.error)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderCustomModels(state) {
+  modelLocations = state.locations || [];
+  const queue = state.queue || [];
+  const downloaded = state.downloaded || [];
+  const activeCount = queue.filter((item) => ["queued", "downloading"].includes(item.status)).length;
+
+  elements.customQueueState.textContent = `${activeCount} queued`;
+  elements.modelQueueList.innerHTML = queue.map(modelJobMarkup).join("");
+  elements.downloadedModelState.textContent = `${downloaded.length} ${downloaded.length === 1 ? "model" : "models"}`;
+  elements.downloadedModelList.innerHTML = downloaded.length
+    ? downloaded.map(modelJobMarkup).join("")
+    : '<p class="empty-state">Completed downloads will appear here.</p>';
+
+  return activeCount > 0;
+}
+
+async function loadCustomModels() {
+  const state = await fetchJson("/api/custom-models");
+  const hasActiveDownloads = renderCustomModels(state);
+  if (!modelDrafts.length) renderDrafts();
+  return hasActiveDownloads;
+}
+
+function beginCustomPolling() {
+  window.clearInterval(customPollTimer);
+  customPollTimer = window.setInterval(async () => {
+    try {
+      const hasActiveDownloads = await loadCustomModels();
+      if (!hasActiveDownloads) window.clearInterval(customPollTimer);
+    } catch {
+      // Preserve the current queue display during a short proxy interruption.
+    }
+  }, 700);
+}
+
+elements.navLinks.forEach((link) => {
+  link.addEventListener("click", () => selectView(link.dataset.viewTarget));
+});
+
 elements.cancel.addEventListener("click", async () => {
   elements.cancel.disabled = true;
   try {
@@ -199,7 +426,16 @@ elements.cancel.addEventListener("click", async () => {
 });
 
 async function initialise() {
+  const initialView = window.location.hash === "#custom-models" ? "custom-models" : "workflows";
+  selectView(initialView, false);
   await loadCatalog();
+  try {
+    if (await loadCustomModels()) beginCustomPolling();
+  } catch {
+    renderDrafts();
+    elements.customQueueState.textContent = "Queue unavailable";
+  }
+
   try {
     const status = await fetchJson("/api/status");
     if (status.status !== "idle") {
@@ -210,6 +446,7 @@ async function initialise() {
   } catch {
     // Catalog errors already provide a useful first-load message.
   }
+
 }
 
 initialise();
