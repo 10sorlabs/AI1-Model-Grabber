@@ -15,9 +15,10 @@ RunPod.
 - A button that routes from the launcher to the matching RunPod ComfyUI proxy.
 - Optional launcher updates from GitHub at container startup.
 
-The current catalog contains four production installers:
+The current catalog contains five production installers:
 
 - Image Generation (approximately 19.9 GB)
+- Krea 2 (approximately 18.4 GB)
 - Dataset Generator (approximately 44.6 GB)
 - Image Edit (approximately 17.8 GB)
 - Motion Control (approximately 26.5 GB)

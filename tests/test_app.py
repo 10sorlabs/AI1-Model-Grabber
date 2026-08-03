@@ -24,8 +24,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 5
-        assert sum(not item.get("disabled", False) for item in workflows) == 4
+        assert len(workflows) == 6
+        assert sum(not item.get("disabled", False) for item in workflows) == 5
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -37,6 +37,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
 
     assert [item["id"] for item in enabled] == [
         "image-generation",
+        "krea-2",
         "dataset-generator",
         "image-edit",
         "motion-control",
@@ -54,9 +55,34 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
             assert file_spec["auth"] in {"none", "huggingface"}
 
 
+def test_krea_2_installer_matches_the_runpod_manifest() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(item for item in catalog["workflows"] if item["id"] == "krea-2")
+
+    assert installer["estimated_size"] == "Approx. 18.4 GB"
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+        "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+        "models/vae/qwen_image_vae.safetensors",
+        "models/loras/MysticXXX_KREA2_v3.safetensors",
+        "models/loras/pawg_krea2.safetensors",
+        "models/loras/RealisticSnapshotKrea2.safetensors",
+        "models/upscale_models/4xNMKDSuperscale_4xNMKDSuperscale.pt",
+        "models/ultralytics/bbox/face_yolov8m.pt",
+        "models/sams/sam_vit_b_01ec64.pth",
+    ]
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "rgthree-comfy",
+        "ComfyUI-Impact-Pack",
+        "ComfyUI-Impact-Subpack",
+        "ComfyUI-KJNodes",
+        "RES4LYF",
+    ]
+
+
 def test_disabled_workflow_cannot_start() -> None:
     with TestClient(launcher_app.app) as client:
-        response = client.post("/api/install/workflow-05")
+        response = client.post("/api/install/workflow-06")
         assert response.status_code == 400
 
 
