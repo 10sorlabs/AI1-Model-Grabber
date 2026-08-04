@@ -26,6 +26,11 @@ The current catalog contains five production installers:
 The catalog installs only models, supporting files and custom nodes. Product
 workflow JSON files are deliberately not included.
 
+Each preset continues after an individual model or custom-node failure. Failed
+items are shown as warnings at the end so the remaining downloads and node
+installs are not discarded. When an existing custom-node checkout does not yet
+contain its pinned commit, the launcher fetches that commit before checkout.
+
 ## Custom models
 
 The **Custom models** section accepts a direct HTTP(S) model link and a target

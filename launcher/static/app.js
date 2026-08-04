@@ -11,6 +11,7 @@ const elements = {
   fill: document.querySelector("#progress-fill"),
   message: document.querySelector("#job-message"),
   metrics: document.querySelector("#job-metrics"),
+  warnings: document.querySelector("#job-warnings"),
   error: document.querySelector("#job-error"),
   cancel: document.querySelector("#cancel-button"),
   comfy: document.querySelector("#comfy-button"),
@@ -157,6 +158,8 @@ function showImmediateError(message) {
   elements.title.textContent = "Could not start workflow";
   elements.percent.textContent = "0%";
   elements.fill.style.width = "0%";
+  elements.warnings.textContent = "";
+  elements.warnings.hidden = true;
   elements.error.textContent = message;
   elements.error.hidden = false;
   elements.cancel.hidden = true;
@@ -192,6 +195,13 @@ function updatePanel(status) {
   }
   elements.metrics.textContent = metrics.filter(Boolean).join(" · ");
 
+  const warnings = Array.isArray(status.warnings) ? status.warnings : [];
+  elements.warnings.innerHTML = warnings.length
+    ? `<strong>Skipped items</strong><ul>${warnings
+        .map((warning) => `<li>${escapeText(warning)}</li>`)
+        .join("")}</ul>`
+    : "";
+  elements.warnings.hidden = warnings.length === 0;
   elements.error.textContent = status.error || "";
   elements.error.hidden = !status.error;
   elements.cancel.hidden = !isRunning;

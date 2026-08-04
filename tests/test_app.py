@@ -117,6 +117,7 @@ def test_frontend_is_served() -> None:
         assert "Download queue" in response.text
         assert "Custom nodes" in response.text
         assert "Install queue" in response.text
+        assert 'id="job-warnings"' in response.text
 
         logo = client.get("/logo.png")
         assert logo.status_code == 200
@@ -495,3 +496,132 @@ def test_custom_node_clone_requirements_and_existing_detection(
     assert second_state.status == "skipped"
     assert (destination / "__init__.py").exists()
     assert not list(custom_nodes_dir.glob(".10sorlabs-*.part"))
+
+
+def test_workflow_fetches_a_missing_pinned_custom_node_commit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    custom_nodes_dir = comfy_dir / "custom_nodes"
+    destination = custom_nodes_dir / "ComfyUI-KJNodes"
+    destination.mkdir(parents=True)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes_dir)
+
+    controller = launcher_app.JobController()
+    commands: list[tuple[str, ...]] = []
+    repo = "https://github.com/kijai/ComfyUI-KJNodes.git"
+    ref = "1289b52fbb6d64a339a4047b9ea74cf7758ccf1e"
+
+    async def fake_process(*command) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        commands.append(normalized)
+        if "remote" in normalized:
+            return 0, repo + "\n"
+        if "cat-file" in normalized:
+            return 1, "missing"
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    asyncio.run(
+        controller._install_custom_node(
+            {
+                "name": "ComfyUI-KJNodes",
+                "repo": repo,
+                "ref": ref,
+                "install_requirements": True,
+            }
+        )
+    )
+
+    assert any("fetch" in command and ref in command for command in commands)
+    assert any("checkout" in command and ref in command for command in commands)
+    assert controller.state.restart_required is True
+
+
+def test_workflow_skips_failed_custom_node_and_continues(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    custom_nodes_dir = tmp_path / "ComfyUI" / "custom_nodes"
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes_dir)
+    controller = launcher_app.JobController()
+    attempted: list[str] = []
+
+    async def fake_install(node) -> None:
+        attempted.append(node["name"])
+        if node["name"] == "Broken-Node":
+            raise RuntimeError("simulated node failure")
+
+    monkeypatch.setattr(controller, "_install_custom_node", fake_install)
+
+    asyncio.run(
+        controller._install_custom_nodes(
+            [
+                {"name": "Broken-Node"},
+                {"name": "Working-Node"},
+            ]
+        )
+    )
+
+    assert attempted == ["Broken-Node", "Working-Node"]
+    assert controller.state.percent == 99
+    assert controller.state.warnings == [
+        "Broken-Node: simulated node failure",
+    ]
+
+
+def test_workflow_skips_failed_model_and_finishes_with_warning(monkeypatch) -> None:
+    controller = launcher_app.JobController()
+    attempted: list[str] = []
+
+    async def ready() -> None:
+        return None
+
+    async def fake_download(
+        _client,
+        file_spec,
+        _index,
+        _file_count,
+        _completed_bytes,
+        _known_total,
+        _download_ceiling,
+    ) -> int:
+        attempted.append(file_spec["name"])
+        if file_spec["name"] == "Broken model":
+            raise RuntimeError("simulated download failure")
+        return 10
+
+    monkeypatch.setattr(controller, "_wait_for_comfyui", ready)
+    monkeypatch.setattr(controller, "_download_file", fake_download)
+
+    asyncio.run(
+        controller._run(
+            {
+                "id": "continue-test",
+                "title": "Continue Test",
+                "files": [
+                    {
+                        "name": "Broken model",
+                        "destination": "models/checkpoints/broken.safetensors",
+                        "size_bytes": 10,
+                    },
+                    {
+                        "name": "Working model",
+                        "destination": "models/checkpoints/working.safetensors",
+                        "size_bytes": 10,
+                    },
+                ],
+                "custom_nodes": [],
+            }
+        )
+    )
+
+    assert attempted == ["Broken model", "Working model"]
+    assert controller.state.status == "complete"
+    assert controller.state.percent == 100
+    assert controller.state.warnings == [
+        "Broken model: simulated download failure",
+    ]
+    assert "1 skipped item" in controller.state.message

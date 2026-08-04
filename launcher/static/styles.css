@@ -572,6 +572,27 @@ h1 {
   line-height: 1.5;
 }
 
+.job-warnings {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(221, 173, 75, 0.32);
+  border-radius: 8px;
+  background: rgba(221, 173, 75, 0.07);
+  color: #e8c985;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.job-warnings strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.job-warnings ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .job-actions {
   display: flex;
   justify-content: flex-end;

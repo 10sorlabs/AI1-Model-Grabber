@@ -92,6 +92,7 @@ class JobState:
     bytes_per_second: float = 0
     percent: float = 0
     error: str | None = None
+    warnings: list[str] = field(default_factory=list)
     comfy_url: str = ""
     restart_required: bool = False
     started_at: str | None = None
@@ -856,6 +857,10 @@ class JobController:
             setattr(self.state, key, value)
         self.state.updated_at = utc_now()
 
+    def add_warning(self, warning: str) -> None:
+        self.state.warnings.append(warning)
+        self.state.updated_at = utc_now()
+
     async def start(self, workflow: dict[str, Any]) -> dict[str, Any]:
         async with self.lock:
             if self.task and not self.task.done():
@@ -892,10 +897,17 @@ class JobController:
                 await self._run_demo(workflow)
             else:
                 await self._install_workflow(workflow)
+            warning_count = len(self.state.warnings)
             self.update(
                 status="complete",
                 stage="complete",
-                message="Workflow ready.",
+                message=(
+                    f"Setup finished with {warning_count} skipped "
+                    f"{'item' if warning_count == 1 else 'items'}. Review the warning"
+                    f"{'' if warning_count == 1 else 's'} below."
+                    if warning_count
+                    else "Workflow ready."
+                ),
                 current_file=None,
                 file_downloaded_bytes=self.state.file_total_bytes,
                 percent=100,
@@ -989,16 +1001,30 @@ class JobController:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
             for index, file_spec in enumerate(files):
                 self.check_cancelled()
-                downloaded = await self._download_file(
-                    client,
-                    file_spec,
-                    index,
-                    len(files),
-                    completed_bytes,
-                    known_total,
-                    download_ceiling,
+                name = str(
+                    file_spec.get("name")
+                    or Path(str(file_spec.get("destination", "file"))).name
                 )
-                completed_bytes += downloaded
+                try:
+                    downloaded = await self._download_file(
+                        client,
+                        file_spec,
+                        index,
+                        len(files),
+                        completed_bytes,
+                        known_total,
+                        download_ceiling,
+                    )
+                    completed_bytes += downloaded
+                except InstallCancelled:
+                    raise
+                except Exception as exc:
+                    self.add_warning(f"{name}: {exc}")
+                    self.update(
+                        message=f"{name} failed — skipped; continuing setup…",
+                        percent=((index + 1) / max(len(files), 1)) * download_ceiling,
+                        bytes_per_second=0,
+                    )
 
         if nodes:
             await self._install_custom_nodes(nodes)
@@ -1117,21 +1143,117 @@ class JobController:
         os.replace(partial, destination)
         return destination.stat().st_size
 
+    async def _run_process(self, *command: str | Path) -> tuple[int, str]:
+        process = await asyncio.create_subprocess_exec(
+            *(str(part) for part in command),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        output, _ = await process.communicate()
+        return process.returncode or 0, output.decode(errors="replace")
+
+    async def _install_custom_node(self, node: dict[str, Any]) -> None:
+        name = str(node.get("name", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+            raise RuntimeError(f"Unsafe custom node name: {name!r}")
+        repo = str(node.get("repo", "")).strip()
+        if not repo.startswith("https://github.com/"):
+            raise RuntimeError(f"Custom node {name} must use a GitHub HTTPS URL.")
+
+        destination = (CUSTOM_NODES_DIR / name).resolve()
+        if not destination.is_relative_to(CUSTOM_NODES_DIR.resolve()):
+            raise RuntimeError(f"Unsafe custom node destination: {name}")
+
+        if not destination.exists():
+            returncode, output = await self._run_process(
+                "git",
+                "clone",
+                "--filter=blob:none",
+                repo,
+                destination,
+            )
+            if returncode:
+                shutil.rmtree(destination, ignore_errors=True)
+                raise RuntimeError(
+                    f"Could not install custom node {name}: {output[-500:]}"
+                )
+        else:
+            returncode, origin = await self._run_process(
+                "git",
+                "-C",
+                destination,
+                "remote",
+                "get-url",
+                "origin",
+            )
+            if returncode or normalized_git_remote(origin) != normalized_git_remote(repo):
+                raise RuntimeError(
+                    f"The existing {name} folder is not the expected Git repository."
+                )
+
+        ref = str(node.get("ref", "")).strip()
+        if ref:
+            returncode, _ = await self._run_process(
+                "git",
+                "-C",
+                destination,
+                "cat-file",
+                "-e",
+                f"{ref}^{{commit}}",
+            )
+            if returncode:
+                returncode, output = await self._run_process(
+                    "git",
+                    "-C",
+                    destination,
+                    "fetch",
+                    "--no-tags",
+                    "--filter=blob:none",
+                    "origin",
+                    ref,
+                )
+                if returncode:
+                    raise RuntimeError(
+                        f"Could not fetch the pinned version for {name}: {output[-500:]}"
+                    )
+
+            returncode, output = await self._run_process(
+                "git",
+                "-C",
+                destination,
+                "checkout",
+                "--detach",
+                ref,
+            )
+            if returncode:
+                raise RuntimeError(
+                    f"Could not select the pinned version for {name}: {output[-500:]}"
+                )
+
+        self.state.restart_required = True
+        requirements = destination / "requirements.txt"
+        if node.get("install_requirements", True) and requirements.exists():
+            pip = COMFYUI_VENV / "bin" / "python"
+            if not pip.exists():
+                pip = Path("python3.12")
+            returncode, output = await self._run_process(
+                pip,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                requirements,
+            )
+            if returncode:
+                raise RuntimeError(
+                    f"Dependencies failed for {name}: {output[-500:]}"
+                )
+
     async def _install_custom_nodes(self, nodes: list[dict[str, Any]]) -> None:
         CUSTOM_NODES_DIR.mkdir(parents=True, exist_ok=True)
         for index, node in enumerate(nodes):
             self.check_cancelled()
-            name = str(node.get("name", "")).strip()
-            if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-                raise RuntimeError(f"Unsafe custom node name: {name!r}")
-            repo = str(node.get("repo", "")).strip()
-            if not repo.startswith("https://github.com/"):
-                raise RuntimeError(f"Custom node {name} must use a GitHub HTTPS URL.")
-
-            destination = (CUSTOM_NODES_DIR / name).resolve()
-            if not destination.is_relative_to(CUSTOM_NODES_DIR):
-                raise RuntimeError(f"Unsafe custom node destination: {name}")
-
+            name = str(node.get("name", "")).strip() or f"Custom node {index + 1}"
             progress = 88 + (index / max(len(nodes), 1)) * 10
             self.update(
                 stage="installing",
@@ -1142,66 +1264,16 @@ class JobController:
                 percent=progress,
                 bytes_per_second=0,
             )
-
-            if not destination.exists():
-                process = await asyncio.create_subprocess_exec(
-                    "git",
-                    "clone",
-                    "--filter=blob:none",
-                    repo,
-                    str(destination),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
+            try:
+                await self._install_custom_node(node)
+            except InstallCancelled:
+                raise
+            except Exception as exc:
+                self.add_warning(f"{name}: {exc}")
+                self.update(
+                    message=f"{name} failed — skipped; continuing setup…",
+                    percent=88 + ((index + 1) / max(len(nodes), 1)) * 10,
                 )
-                output, _ = await process.communicate()
-                if process.returncode:
-                    shutil.rmtree(destination, ignore_errors=True)
-                    raise RuntimeError(
-                        f"Could not install custom node {name}: "
-                        f"{output.decode(errors='replace')[-500:]}"
-                    )
-
-            ref = str(node.get("ref", "")).strip()
-            if ref:
-                process = await asyncio.create_subprocess_exec(
-                    "git",
-                    "-C",
-                    str(destination),
-                    "checkout",
-                    "--detach",
-                    ref,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                output, _ = await process.communicate()
-                if process.returncode:
-                    raise RuntimeError(
-                        f"Could not select the pinned version for {name}: "
-                        f"{output.decode(errors='replace')[-500:]}"
-                    )
-
-            requirements = destination / "requirements.txt"
-            if node.get("install_requirements", True) and requirements.exists():
-                pip = COMFYUI_VENV / "bin" / "python"
-                if not pip.exists():
-                    pip = Path("python3.12")
-                process = await asyncio.create_subprocess_exec(
-                    str(pip),
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    str(requirements),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                output, _ = await process.communicate()
-                if process.returncode:
-                    raise RuntimeError(
-                        f"Dependencies failed for {name}: "
-                        f"{output.decode(errors='replace')[-500:]}"
-                    )
-            self.state.restart_required = True
 
         self.update(percent=99, message="Finishing workflow setup…")
 
