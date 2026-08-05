@@ -35,6 +35,7 @@ COMFYUI_DIR = Path(
 ).resolve()
 CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
+COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstrip("/")
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
 # Current built-in model locations from ComfyUI's folder_paths.py, plus the two
@@ -95,6 +96,7 @@ class JobState:
     warnings: list[str] = field(default_factory=list)
     comfy_url: str = ""
     restart_required: bool = False
+    comfy_restarted: bool = False
     started_at: str | None = None
     completed_at: str | None = None
     updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -845,6 +847,105 @@ class CustomNodeController:
             )
 
 
+@dataclass
+class ComfyServiceState:
+    status: str = "idle"
+    message: str = "ComfyUI is running."
+    error: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def export(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class ComfyServiceController:
+    def __init__(self) -> None:
+        self.state = ComfyServiceState()
+        self.task: asyncio.Task[None] | None = None
+        self.lock = asyncio.Lock()
+
+    def update(self, **changes: Any) -> None:
+        for key, value in changes.items():
+            setattr(self.state, key, value)
+        self.state.updated_at = utc_now()
+
+    async def start(self) -> dict[str, Any]:
+        async with self.lock:
+            if self.task and not self.task.done():
+                return self.state.export()
+            self.state = ComfyServiceState(
+                status="restarting",
+                message="Restarting ComfyUI…",
+                started_at=utc_now(),
+            )
+            self.task = asyncio.create_task(self._restart())
+            return self.state.export()
+
+    async def wait(self) -> dict[str, Any]:
+        task = self.task
+        if task:
+            await task
+        if self.state.status == "error":
+            raise RuntimeError(self.state.error or "ComfyUI restart failed.")
+        return self.state.export()
+
+    async def _is_ready(self, client: httpx.AsyncClient) -> bool:
+        try:
+            response = await client.get(f"{COMFYUI_LOCAL_URL}/system_stats")
+            return response.status_code == 200
+        except httpx.RequestError:
+            return False
+
+    async def _restart(self) -> None:
+        timeout = httpx.Timeout(connect=3, read=5, write=5, pool=3)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                manager = await client.get(f"{COMFYUI_LOCAL_URL}/manager/version")
+                if manager.status_code != 200:
+                    raise RuntimeError(
+                        "ComfyUI Manager is unavailable, so ComfyUI could not be restarted."
+                    )
+
+                try:
+                    response = await client.post(
+                        f"{COMFYUI_LOCAL_URL}/manager/reboot",
+                        json={},
+                    )
+                    if response.status_code >= 400:
+                        raise RuntimeError(
+                            f"ComfyUI Manager rejected the restart (HTTP {response.status_code})."
+                        )
+                except httpx.RequestError:
+                    # A successful reboot normally closes the current HTTP connection.
+                    pass
+
+                started = time.monotonic()
+                saw_offline = False
+                while time.monotonic() - started < 120:
+                    await asyncio.sleep(1)
+                    ready = await self._is_ready(client)
+                    saw_offline = saw_offline or not ready
+                    if ready and (saw_offline or time.monotonic() - started >= 4):
+                        mark_comfy_restart_complete()
+                        self.update(
+                            status="ready",
+                            message="ComfyUI restarted and is ready.",
+                            error=None,
+                            completed_at=utc_now(),
+                        )
+                        return
+            raise RuntimeError("ComfyUI did not become ready again within two minutes.")
+        except Exception as exc:
+            self.update(
+                status="error",
+                message="ComfyUI restart failed.",
+                error=str(exc),
+                completed_at=utc_now(),
+            )
+
+
 class JobController:
     def __init__(self) -> None:
         self.state = JobState(comfy_url=comfy_public_url())
@@ -897,6 +998,21 @@ class JobController:
                 await self._run_demo(workflow)
             else:
                 await self._install_workflow(workflow)
+            if self.state.restart_required:
+                self.update(
+                    stage="restarting",
+                    message="Restarting ComfyUI to load the installed custom nodes…",
+                    current_file=None,
+                    percent=99,
+                    bytes_per_second=0,
+                )
+                try:
+                    await comfy_service_controller.start()
+                    await comfy_service_controller.wait()
+                    self.state.restart_required = False
+                    self.state.comfy_restarted = True
+                except Exception as exc:
+                    self.add_warning(f"Automatic ComfyUI restart: {exc}")
             warning_count = len(self.state.warnings)
             self.update(
                 status="complete",
@@ -906,7 +1022,11 @@ class JobController:
                     f"{'item' if warning_count == 1 else 'items'}. Review the warning"
                     f"{'' if warning_count == 1 else 's'} below."
                     if warning_count
-                    else "Workflow ready."
+                    else (
+                        "Workflow ready. ComfyUI restarted automatically."
+                        if self.state.comfy_restarted
+                        else "Workflow ready."
+                    )
                 ),
                 current_file=None,
                 file_downloaded_bytes=self.state.file_total_bytes,
@@ -1278,6 +1398,15 @@ class JobController:
         self.update(percent=99, message="Finishing workflow setup…")
 
 
+def mark_comfy_restart_complete() -> None:
+    controller.state.restart_required = False
+    for item in custom_node_controller.items.values():
+        if item.restart_required:
+            item.restart_required = False
+            item.updated_at = utc_now()
+
+
+comfy_service_controller = ComfyServiceController()
 controller = JobController()
 custom_model_controller = CustomModelController()
 custom_node_controller = CustomNodeController()
@@ -1326,6 +1455,31 @@ async def install(workflow_id: str) -> dict[str, Any]:
 @app.post("/api/cancel")
 async def cancel() -> dict[str, Any]:
     return await controller.cancel()
+
+
+@app.get("/api/comfy-restart")
+async def comfy_restart_status() -> dict[str, Any]:
+    return comfy_service_controller.state.export()
+
+
+@app.post("/api/comfy-restart")
+async def restart_comfy() -> dict[str, Any]:
+    if comfy_service_controller.task and not comfy_service_controller.task.done():
+        return comfy_service_controller.state.export()
+    busy = any(
+        task and not task.done()
+        for task in (
+            controller.task,
+            custom_model_controller.worker_task,
+            custom_node_controller.worker_task,
+        )
+    )
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current installation queue to finish before restarting ComfyUI.",
+        )
+    return await comfy_service_controller.start()
 
 
 @app.get("/api/custom-models")

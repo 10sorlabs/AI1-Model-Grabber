@@ -79,6 +79,16 @@ def test_krea_2_installer_matches_the_runpod_manifest() -> None:
         "RES4LYF",
     ]
 
+    res4lyf_refs = {
+        node["ref"]
+        for workflow in catalog["workflows"]
+        for node in workflow.get("custom_nodes", [])
+        if node["name"] == "RES4LYF"
+    }
+    assert res4lyf_refs == {
+        "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
+    }
+
 
 def test_disabled_workflow_cannot_start() -> None:
     with TestClient(launcher_app.app) as client:
@@ -118,6 +128,8 @@ def test_frontend_is_served() -> None:
         assert "Custom nodes" in response.text
         assert "Install queue" in response.text
         assert 'id="job-warnings"' in response.text
+        assert 'id="restart-button"' in response.text
+        assert 'id="custom-node-restart-button"' in response.text
 
         logo = client.get("/logo.png")
         assert logo.status_code == 200
@@ -625,3 +637,94 @@ def test_workflow_skips_failed_model_and_finishes_with_warning(monkeypatch) -> N
         "Broken model: simulated download failure",
     ]
     assert "1 skipped item" in controller.state.message
+
+
+def test_comfyui_manager_restart_waits_until_comfyui_is_ready(monkeypatch) -> None:
+    states = iter([503, 200])
+    marked_ready: list[bool] = []
+
+    class Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, url: str):
+            if url.endswith("/manager/version"):
+                return Response(200)
+            return Response(next(states))
+
+        async def post(self, _url: str, **_kwargs):
+            raise launcher_app.httpx.RemoteProtocolError("expected reboot disconnect")
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(launcher_app.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(launcher_app.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(
+        launcher_app,
+        "mark_comfy_restart_complete",
+        lambda: marked_ready.append(True),
+    )
+    service = launcher_app.ComfyServiceController()
+
+    async def restart() -> None:
+        await service.start()
+        await service.wait()
+
+    asyncio.run(restart())
+
+    assert service.state.status == "ready"
+    assert service.state.error is None
+    assert marked_ready == [True]
+
+
+def test_workflow_automatically_restarts_comfyui_after_node_install(
+    monkeypatch,
+) -> None:
+    controller = launcher_app.JobController()
+    calls: list[str] = []
+
+    class FakeRestartService:
+        async def start(self) -> dict:
+            calls.append("start")
+            return {"status": "restarting"}
+
+        async def wait(self) -> dict:
+            calls.append("wait")
+            return {"status": "ready"}
+
+    async def fake_install(_workflow) -> None:
+        controller.state.restart_required = True
+
+    monkeypatch.setattr(controller, "_install_workflow", fake_install)
+    monkeypatch.setattr(
+        launcher_app,
+        "comfy_service_controller",
+        FakeRestartService(),
+    )
+
+    asyncio.run(
+        controller._run(
+            {
+                "id": "restart-test",
+                "title": "Restart Test",
+                "files": [],
+                "custom_nodes": [{"name": "Example"}],
+            }
+        )
+    )
+
+    assert calls == ["start", "wait"]
+    assert controller.state.status == "complete"
+    assert controller.state.restart_required is False
+    assert controller.state.comfy_restarted is True

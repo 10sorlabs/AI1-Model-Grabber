@@ -365,6 +365,18 @@ h1 {
   margin-bottom: 16px;
 }
 
+.section-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.restart-comfy-button {
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 0.62rem;
+}
+
 .section-heading h2 {
   margin: 0;
   font-size: 0.82rem;

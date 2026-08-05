@@ -82,6 +82,9 @@
               <button id="cancel-button" class="button button-ghost" type="button">
                 Cancel
               </button>
+              <button id="restart-button" class="button button-ghost" type="button" hidden>
+                RESTART COMFYUI
+              </button>
               <a id="comfy-button" class="button button-primary" href="#" hidden>
                 TO COMFYUI <span aria-hidden="true">&rarr;</span>
               </a>
@@ -133,8 +136,19 @@
           <section class="model-section downloaded-section" aria-labelledby="installed-node-heading">
             <div class="section-heading">
               <h2 id="installed-node-heading">Installed nodes</h2>
-              <span id="installed-node-state" class="catalog-state">0 nodes</span>
+              <div class="section-heading-actions">
+                <span id="installed-node-state" class="catalog-state">0 nodes</span>
+                <button
+                  id="custom-node-restart-button"
+                  class="button button-ghost restart-comfy-button"
+                  type="button"
+                  hidden
+                >
+                  RESTART COMFYUI
+                </button>
+              </div>
             </div>
+            <p id="custom-node-restart-error" class="draft-error" hidden></p>
             <div id="installed-node-list" class="model-job-list" aria-live="polite">
               <p class="empty-state">Completed custom nodes will appear here.</p>
             </div>

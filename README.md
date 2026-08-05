@@ -30,6 +30,8 @@ Each preset continues after an individual model or custom-node failure. Failed
 items are shown as warnings at the end so the remaining downloads and node
 installs are not discarded. When an existing custom-node checkout does not yet
 contain its pinned commit, the launcher fetches that commit before checkout.
+After a preset installs custom nodes, ComfyUI is automatically restarted through
+ComfyUI Manager and the launcher waits until port 8188 is ready again.
 
 ## Custom models
 
@@ -52,7 +54,8 @@ and the completed folder is then moved into `ComfyUI/custom_nodes`.
 An existing checkout with the same Git origin is shown as already found. Failed
 clones or dependency installs remove their temporary folder instead of leaving
 an incomplete custom node behind. Newly installed nodes require a ComfyUI
-restart before they become available.
+restart before they become available; the **Restart ComfyUI** button performs
+that restart without restarting the pod.
 
 ## RunPod template
 

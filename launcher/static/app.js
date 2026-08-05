@@ -14,6 +14,7 @@ const elements = {
   warnings: document.querySelector("#job-warnings"),
   error: document.querySelector("#job-error"),
   cancel: document.querySelector("#cancel-button"),
+  restart: document.querySelector("#restart-button"),
   comfy: document.querySelector("#comfy-button"),
   modelDraftList: document.querySelector("#model-draft-list"),
   modelQueueList: document.querySelector("#model-queue-list"),
@@ -25,6 +26,8 @@ const elements = {
   customNodeQueueState: document.querySelector("#custom-node-queue-state"),
   installedNodeList: document.querySelector("#installed-node-list"),
   installedNodeState: document.querySelector("#installed-node-state"),
+  customNodeRestart: document.querySelector("#custom-node-restart-button"),
+  customNodeRestartError: document.querySelector("#custom-node-restart-error"),
 };
 
 const runningStates = new Set(["running"]);
@@ -33,6 +36,7 @@ let activeWorkflowId = null;
 let pollTimer = null;
 let customPollTimer = null;
 let customNodePollTimer = null;
+let comfyRestartPollTimer = null;
 let modelLocations = [];
 let draftSequence = 0;
 let modelDrafts = [];
@@ -163,6 +167,7 @@ function showImmediateError(message) {
   elements.error.textContent = message;
   elements.error.hidden = false;
   elements.cancel.hidden = true;
+  elements.restart.hidden = true;
   elements.comfy.hidden = true;
 }
 
@@ -205,6 +210,7 @@ function updatePanel(status) {
   elements.error.textContent = status.error || "";
   elements.error.hidden = !status.error;
   elements.cancel.hidden = !isRunning;
+  elements.restart.hidden = !(isComplete && status.restart_required);
   elements.comfy.hidden = !isComplete;
   if (isComplete) {
     elements.comfy.href = comfyUrl(status.comfy_url);
@@ -217,6 +223,76 @@ function updatePanel(status) {
 function beginPolling() {
   window.clearInterval(pollTimer);
   pollTimer = window.setInterval(pollStatus, 500);
+}
+
+function restartButtons() {
+  return [elements.restart, elements.customNodeRestart];
+}
+
+function setRestartButtonsBusy(isBusy) {
+  restartButtons().forEach((button) => {
+    button.disabled = isBusy;
+    button.textContent = isBusy ? "RESTARTING…" : "RESTART COMFYUI";
+  });
+}
+
+async function refreshAfterComfyRestart() {
+  try {
+    const status = await fetchJson("/api/status");
+    if (status.status !== "idle") updatePanel(status);
+  } catch {
+    // The workflow status is optional on the custom-nodes page.
+  }
+  try {
+    await loadCustomNodes();
+  } catch {
+    // Preserve the existing custom-node display during a short proxy interruption.
+  }
+}
+
+async function pollComfyRestart() {
+  try {
+    const state = await fetchJson("/api/comfy-restart");
+    if (state.status === "restarting") return;
+    window.clearInterval(comfyRestartPollTimer);
+    setRestartButtonsBusy(false);
+    if (state.status === "ready") {
+      elements.error.hidden = true;
+      elements.customNodeRestartError.hidden = true;
+      await refreshAfterComfyRestart();
+      return;
+    }
+    if (state.status === "error") {
+      const message = state.error || "ComfyUI restart failed.";
+      elements.error.textContent = message;
+      elements.error.hidden = elements.panel.hidden;
+      elements.customNodeRestartError.textContent = message;
+      elements.customNodeRestartError.hidden = false;
+    }
+  } catch {
+    // A short interruption is expected while ComfyUI is restarting.
+  }
+}
+
+function beginComfyRestartPolling() {
+  window.clearInterval(comfyRestartPollTimer);
+  comfyRestartPollTimer = window.setInterval(pollComfyRestart, 1000);
+}
+
+async function restartComfyUI() {
+  setRestartButtonsBusy(true);
+  elements.error.hidden = true;
+  elements.customNodeRestartError.hidden = true;
+  try {
+    await fetchJson("/api/comfy-restart", { method: "POST" });
+    beginComfyRestartPolling();
+  } catch (error) {
+    setRestartButtonsBusy(false);
+    elements.error.textContent = error.message;
+    elements.error.hidden = elements.panel.hidden;
+    elements.customNodeRestartError.textContent = error.message;
+    elements.customNodeRestartError.hidden = false;
+  }
 }
 
 async function pollStatus() {
@@ -542,6 +618,8 @@ function renderCustomNodes(state) {
   elements.installedNodeList.innerHTML = installed.length
     ? installed.map(customNodeMarkup).join("")
     : '<p class="empty-state">Completed custom nodes will appear here.</p>';
+  const needsRestart = installed.some((item) => item.restart_required);
+  elements.customNodeRestart.hidden = !needsRestart || activeCount > 0;
   return activeCount > 0;
 }
 
@@ -578,6 +656,9 @@ elements.cancel.addEventListener("click", async () => {
   }
 });
 
+elements.restart.addEventListener("click", restartComfyUI);
+elements.customNodeRestart.addEventListener("click", restartComfyUI);
+
 async function initialise() {
   const requestedView = window.location.hash.replace("#", "");
   const initialView = ["workflows", "custom-models", "custom-nodes"].includes(requestedView)
@@ -607,6 +688,16 @@ async function initialise() {
     }
   } catch {
     // Catalog errors already provide a useful first-load message.
+  }
+
+  try {
+    const restartState = await fetchJson("/api/comfy-restart");
+    if (restartState.status === "restarting") {
+      setRestartButtonsBusy(true);
+      beginComfyRestartPolling();
+    }
+  } catch {
+    // Restart controls remain available when the status endpoint is briefly unavailable.
   }
 
 }

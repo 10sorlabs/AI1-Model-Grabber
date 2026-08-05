@@ -76,7 +76,7 @@
         {
           "name": "RES4LYF",
           "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
-          "ref": "022c873c6d198c67b3312a1804336533a050df18",
+          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
           "install_requirements": true
         },
         {
@@ -202,7 +202,7 @@
         {
           "name": "RES4LYF",
           "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
-          "ref": "022c873c6d198c67b3312a1804336533a050df18",
+          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
           "install_requirements": true
         }
       ]
@@ -290,7 +290,7 @@
         {
           "name": "RES4LYF",
           "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
-          "ref": "022c873c6d198c67b3312a1804336533a050df18",
+          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
           "install_requirements": true
         },
         {
