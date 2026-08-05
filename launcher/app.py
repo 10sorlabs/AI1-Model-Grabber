@@ -994,14 +994,16 @@ class JobController:
 
     async def _run(self, workflow: dict[str, Any]) -> None:
         try:
-            if workflow.get("demo"):
+            is_demo = bool(workflow.get("demo"))
+            if is_demo:
                 await self._run_demo(workflow)
             else:
                 await self._install_workflow(workflow)
-            if self.state.restart_required:
+            if not is_demo:
+                self.state.restart_required = True
                 self.update(
                     stage="restarting",
-                    message="Restarting ComfyUI to load the installed custom nodes…",
+                    message="Restarting ComfyUI to load the installed workflow…",
                     current_file=None,
                     percent=99,
                     bytes_per_second=0,

@@ -30,7 +30,7 @@ Each preset continues after an individual model or custom-node failure. Failed
 items are shown as warnings at the end so the remaining downloads and node
 installs are not discarded. When an existing custom-node checkout does not yet
 contain its pinned commit, the launcher fetches that commit before checkout.
-After a preset installs custom nodes, ComfyUI is automatically restarted through
+After every preset installation, ComfyUI is automatically restarted through
 ComfyUI Manager and the launcher waits until port 8188 is ready again.
 
 ## Custom models

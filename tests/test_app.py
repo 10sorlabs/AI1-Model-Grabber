@@ -588,6 +588,13 @@ def test_workflow_skips_failed_model_and_finishes_with_warning(monkeypatch) -> N
     controller = launcher_app.JobController()
     attempted: list[str] = []
 
+    class FakeRestartService:
+        async def start(self) -> dict:
+            return {"status": "restarting"}
+
+        async def wait(self) -> dict:
+            return {"status": "ready"}
+
     async def ready() -> None:
         return None
 
@@ -607,6 +614,11 @@ def test_workflow_skips_failed_model_and_finishes_with_warning(monkeypatch) -> N
 
     monkeypatch.setattr(controller, "_wait_for_comfyui", ready)
     monkeypatch.setattr(controller, "_download_file", fake_download)
+    monkeypatch.setattr(
+        launcher_app,
+        "comfy_service_controller",
+        FakeRestartService(),
+    )
 
     asyncio.run(
         controller._run(
@@ -688,7 +700,7 @@ def test_comfyui_manager_restart_waits_until_comfyui_is_ready(monkeypatch) -> No
     assert marked_ready == [True]
 
 
-def test_workflow_automatically_restarts_comfyui_after_node_install(
+def test_every_real_workflow_automatically_restarts_comfyui(
     monkeypatch,
 ) -> None:
     controller = launcher_app.JobController()
@@ -704,7 +716,7 @@ def test_workflow_automatically_restarts_comfyui_after_node_install(
             return {"status": "ready"}
 
     async def fake_install(_workflow) -> None:
-        controller.state.restart_required = True
+        return None
 
     monkeypatch.setattr(controller, "_install_workflow", fake_install)
     monkeypatch.setattr(
@@ -719,7 +731,7 @@ def test_workflow_automatically_restarts_comfyui_after_node_install(
                 "id": "restart-test",
                 "title": "Restart Test",
                 "files": [],
-                "custom_nodes": [{"name": "Example"}],
+                "custom_nodes": [],
             }
         )
     )
@@ -728,3 +740,41 @@ def test_workflow_automatically_restarts_comfyui_after_node_install(
     assert controller.state.status == "complete"
     assert controller.state.restart_required is False
     assert controller.state.comfy_restarted is True
+
+
+def test_demo_workflow_does_not_restart_comfyui(monkeypatch) -> None:
+    controller = launcher_app.JobController()
+    calls: list[str] = []
+
+    class FakeRestartService:
+        async def start(self) -> dict:
+            calls.append("start")
+            return {"status": "restarting"}
+
+        async def wait(self) -> dict:
+            calls.append("wait")
+            return {"status": "ready"}
+
+    async def fake_demo(_workflow) -> None:
+        return None
+
+    monkeypatch.setattr(controller, "_run_demo", fake_demo)
+    monkeypatch.setattr(
+        launcher_app,
+        "comfy_service_controller",
+        FakeRestartService(),
+    )
+
+    asyncio.run(
+        controller._run(
+            {
+                "id": "foundation-test",
+                "title": "Foundation Test",
+                "demo": True,
+            }
+        )
+    )
+
+    assert calls == []
+    assert controller.state.status == "complete"
+    assert controller.state.comfy_restarted is False
