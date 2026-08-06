@@ -310,6 +310,18 @@
           "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git",
           "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
           "install_requirements": true
+        },
+        {
+          "name": "ComfyUI_Comfyroll_CustomNodes",
+          "repo": "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes.git",
+          "ref": "d78b780ae43fcf8c6b7c6505e6ffb4584281ceca",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI_FaceAnalysis",
+          "repo": "https://github.com/cubiq/ComfyUI_FaceAnalysis.git",
+          "ref": "8846653446a6b13582da11793faf950325a398e0",
+          "install_requirements": true
         }
       ]
     },
