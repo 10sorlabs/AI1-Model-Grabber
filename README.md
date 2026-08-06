@@ -114,6 +114,7 @@ and custom nodes:
   "badge": "IMAGE",
   "accent": "#b8ff5a",
   "estimated_size": "18.4 GB",
+  "update_comfyui": true,
   "files": [
     {
       "name": "example-model.safetensors",
@@ -140,6 +141,11 @@ and custom nodes:
   ]
 }
 ```
+
+Set `update_comfyui` to `true` when a preset requires the newest ComfyUI code.
+Before downloading that preset, the launcher updates from
+`Comfy-Org/ComfyUI:master` and installs its requirements into the ComfyUI Python
+environment. The standard end-of-preset restart then loads the new version.
 
 Supported file authentication values are `none`, `huggingface`, `civitai` and
 `github`. Corresponding environment names are documented in `.env.example`.

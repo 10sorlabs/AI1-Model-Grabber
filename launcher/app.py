@@ -1100,12 +1100,77 @@ class JobController:
             )
             await asyncio.sleep(1)
 
+    async def _update_comfyui(self) -> None:
+        git_directory = COMFYUI_DIR / ".git"
+        requirements = COMFYUI_DIR / "requirements.txt"
+        if not git_directory.is_dir():
+            raise RuntimeError(
+                "ComfyUI cannot be updated because its Git repository was not found."
+            )
+
+        commands: list[tuple[str, tuple[str | Path, ...]]] = [
+            (
+                "Configuring the official ComfyUI repository…",
+                (
+                    "git",
+                    "-C",
+                    COMFYUI_DIR,
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/Comfy-Org/ComfyUI.git",
+                ),
+            ),
+            (
+                "Downloading the latest ComfyUI version…",
+                ("git", "-C", COMFYUI_DIR, "fetch", "--prune", "origin", "master"),
+            ),
+            (
+                "Installing the latest ComfyUI version…",
+                ("git", "-C", COMFYUI_DIR, "reset", "--hard", "origin/master"),
+            ),
+        ]
+        for message, command in commands:
+            self.check_cancelled()
+            self.update(stage="updating", message=message, bytes_per_second=0)
+            returncode, output = await self._run_process(*command)
+            if returncode:
+                raise RuntimeError(f"ComfyUI update failed: {output[-500:]}")
+
+        if not requirements.is_file():
+            raise RuntimeError("ComfyUI requirements.txt was not found after the update.")
+
+        python = COMFYUI_VENV / "bin" / "python"
+        if not python.exists():
+            python = Path(sys.executable)
+        self.update(
+            stage="updating",
+            message="Installing the latest ComfyUI requirements…",
+            bytes_per_second=0,
+        )
+        returncode, output = await self._run_process(
+            python,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            requirements,
+        )
+        if returncode:
+            raise RuntimeError(f"ComfyUI requirements failed: {output[-500:]}")
+
     async def _install_workflow(self, workflow: dict[str, Any]) -> None:
         await self._wait_for_comfyui()
         files = workflow.get("files", [])
         nodes = workflow.get("custom_nodes", [])
-        if not files and not nodes:
-            raise RuntimeError("This workflow does not define any files or custom nodes.")
+        should_update_comfyui = bool(workflow.get("update_comfyui"))
+        if not files and not nodes and not should_update_comfyui:
+            raise RuntimeError(
+                "This workflow does not define any files, custom nodes or updates."
+            )
+
+        if should_update_comfyui:
+            await self._update_comfyui()
 
         known_total = sum(
             max(0, int(file_spec.get("size_bytes", 0))) for file_spec in files

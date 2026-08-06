@@ -25,7 +25,7 @@ def test_health_and_public_catalog() -> None:
         assert response.status_code == 200
         workflows = response.json()["workflows"]
         assert len(workflows) == 6
-        assert sum(not item.get("disabled", False) for item in workflows) == 5
+        assert sum(not item.get("disabled", False) for item in workflows) == 6
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -41,6 +41,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "dataset-generator",
         "image-edit",
         "motion-control",
+        "minimax-h3",
     ]
     assert all(item["files"] for item in enabled)
     assert all(item["custom_nodes"] for item in enabled)
@@ -90,10 +91,33 @@ def test_krea_2_installer_matches_the_runpod_manifest() -> None:
     }
 
 
-def test_disabled_workflow_cannot_start() -> None:
+def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "minimax-h3"
+    )
+
+    assert installer["estimated_size"] == "Approx. 63.4 GB"
+    assert installer["update_comfyui"] is True
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "models/vae/minimax_h3_video_vae_fp16.safetensors",
+        "models/vae/minimax_h3_audio_vae_fp32.safetensors",
+    ]
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "ComfyUI-KJNodes",
+        "rgthree-comfy",
+        "ComfyUI-VideoHelperSuite",
+    ]
+    assert all("/resolve/main/" in item["url"] for item in installer["files"])
+
+
+def test_unknown_workflow_cannot_start() -> None:
     with TestClient(launcher_app.app) as client:
-        response = client.post("/api/install/workflow-06")
-        assert response.status_code == 400
+        response = client.post("/api/install/does-not-exist")
+        assert response.status_code == 404
 
 
 def test_huggingface_auth_can_use_baked_token_file(
@@ -778,3 +802,65 @@ def test_demo_workflow_does_not_restart_comfyui(monkeypatch) -> None:
     assert calls == []
     assert controller.state.status == "complete"
     assert controller.state.comfy_restarted is False
+
+
+def test_comfyui_update_uses_official_master_and_runtime_python(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    (comfy_dir / ".git").mkdir(parents=True)
+    (comfy_dir / "requirements.txt").write_text("", encoding="utf-8")
+    comfy_python = comfy_dir / ".venv-cu128" / "bin" / "python"
+    comfy_python.parent.mkdir(parents=True)
+    comfy_python.touch()
+
+    controller = launcher_app.JobController()
+    commands: list[tuple[str, ...]] = []
+
+    async def fake_process(*command) -> tuple[int, str]:
+        commands.append(tuple(str(part) for part in command))
+        return 0, "ok"
+
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    asyncio.run(controller._update_comfyui())
+
+    assert commands == [
+        (
+            "git",
+            "-C",
+            str(comfy_dir),
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/Comfy-Org/ComfyUI.git",
+        ),
+        (
+            "git",
+            "-C",
+            str(comfy_dir),
+            "fetch",
+            "--prune",
+            "origin",
+            "master",
+        ),
+        (
+            "git",
+            "-C",
+            str(comfy_dir),
+            "reset",
+            "--hard",
+            "origin/master",
+        ),
+        (
+            str(comfy_python),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(comfy_dir / "requirements.txt"),
+        ),
+    ]
