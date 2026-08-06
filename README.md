@@ -152,6 +152,16 @@ Supported file authentication values are `none`, `huggingface`, `civitai` and
 Download URLs and authentication details are not returned by the public catalog
 API.
 
+## Local Windows installers
+
+Standalone Windows installers for Dataset Generator, Krea 2 and MiniMax H3 live
+in `local-installers/`. Copy the required `.bat` file directly into the main
+ComfyUI directory—the folder containing `models` and `custom_nodes`—and run it
+while ComfyUI is stopped. The scripts verify SHA-256 checksums, install pinned
+custom-node versions and their requirements, and retain successful items if a
+later item fails. Dataset Generator reads a gated-model token from `HF_TOKEN` or
+prompts for one. MiniMax H3 also updates ComfyUI before installing its files.
+
 ## Security note
 
 Do not treat a token supplied to a user-controlled pod as secret. A person with

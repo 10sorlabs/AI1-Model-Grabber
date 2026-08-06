@@ -196,7 +196,7 @@
         {
           "name": "ComfyUI-KJNodes",
           "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
-          "ref": "1289b52fbb6d64a339a4047b9ea74cf7758ccf1e",
+          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
           "install_requirements": true
         },
         {

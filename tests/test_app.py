@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import importlib
 import os
+import re
 import subprocess
 import threading
 import time
@@ -112,6 +113,47 @@ def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
         "ComfyUI-VideoHelperSuite",
     ]
     assert all("/resolve/main/" in item["url"] for item in installer["files"])
+
+
+def test_local_windows_installers_match_the_catalog() -> None:
+    catalog = launcher_app.load_catalog()
+    workflows = {item["id"]: item for item in catalog["workflows"]}
+    installers = {
+        "dataset_generator_model_installer.bat": "dataset-generator",
+        "krea2_model_installer.bat": "krea-2",
+        "minimax_h3_model_installer.bat": "minimax-h3",
+    }
+
+    for filename, workflow_id in installers.items():
+        script = (
+            launcher_app.SOURCE_ROOT / "local-installers" / filename
+        ).read_text(encoding="utf-8")
+        workflow = workflows[workflow_id]
+        downloads = [
+            (url, destination.replace("\\", "/"), sha256)
+            for url, destination, sha256 in re.findall(
+                r'^call :download "([^"]+)" "([^"]+)" "([0-9a-f]{64})"',
+                script,
+                flags=re.MULTILINE,
+            )
+        ]
+        nodes = re.findall(
+            r'^call :install_node "([^"]+)" "([^"]+)" "([0-9a-f]{40})"',
+            script,
+            flags=re.MULTILINE,
+        )
+
+        assert downloads == [
+            (item["url"], item["destination"], item["sha256"])
+            for item in workflow["files"]
+        ]
+        assert nodes == [
+            (item["name"], item["repo"], item["ref"])
+            for item in workflow["custom_nodes"]
+        ]
+        assert "Get-FileHash -Algorithm SHA256" in script
+        assert "checkout --detach" in script
+        assert "pip install --disable-pip-version-check" in script
 
 
 def test_unknown_workflow_cannot_start() -> None:
