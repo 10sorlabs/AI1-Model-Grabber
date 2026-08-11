@@ -32,6 +32,9 @@
           <button class="sidebar-link" type="button" data-view-target="custom-nodes">
             Custom nodes
           </button>
+          <button class="sidebar-link" type="button" data-view-target="account">
+            Account
+          </button>
         </nav>
       </aside>
 
@@ -45,7 +48,10 @@
           <section class="workflow-section" aria-labelledby="workflow-heading">
             <div class="section-heading">
               <h2 id="workflow-heading">Workflows</h2>
-              <span id="catalog-state" class="catalog-state">Loading...</span>
+              <div class="section-heading-actions">
+                <span id="catalog-state" class="catalog-state">Loading...</span>
+                <span id="tier-badge" class="catalog-state" hidden></span>
+              </div>
             </div>
             <div id="workflow-grid" class="workflow-grid" aria-live="polite"></div>
           </section>
@@ -152,6 +158,56 @@
             <div id="installed-node-list" class="model-job-list" aria-live="polite">
               <p class="empty-state">Completed custom nodes will appear here.</p>
             </div>
+          </section>
+        </section>
+
+        <section id="view-account" class="app-view" data-view="account" hidden>
+          <header class="page-heading">
+            <h1>Account</h1>
+            <p>Sign in to use fast downloads on this pod.</p>
+          </header>
+
+          <section class="model-section" aria-labelledby="account-heading">
+            <div class="section-heading">
+              <h2 id="account-heading">Sign in</h2>
+              <span id="account-state" class="catalog-state">Not signed in</span>
+            </div>
+
+            <div id="account-form" class="model-draft-row">
+              <label class="model-field">
+                <span class="sr-only">Email</span>
+                <input
+                  id="account-email"
+                  class="model-input"
+                  type="email"
+                  placeholder="Email"
+                  autocomplete="username"
+                />
+              </label>
+              <label class="model-field">
+                <span class="sr-only">Password</span>
+                <input
+                  id="account-password"
+                  class="model-input"
+                  type="password"
+                  placeholder="Password"
+                  autocomplete="current-password"
+                />
+              </label>
+              <button
+                id="account-signin"
+                class="button button-primary download-model-button"
+                type="button"
+              >
+                SIGN IN
+              </button>
+              <p id="account-error" class="draft-error" hidden></p>
+            </div>
+
+            <p id="account-summary" class="empty-state" hidden></p>
+            <button id="account-signout" class="button button-ghost" type="button" hidden>
+              SIGN OUT
+            </button>
           </section>
         </section>
       </main>

@@ -20,7 +20,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr, field_validator
 
 from launcher import remote
 
@@ -134,6 +134,30 @@ class CustomModelRequest(BaseModel):
 
 class CustomNodeRequest(BaseModel):
     url: str
+
+
+class AccountLoginRequest(BaseModel):
+    """Both fields default and coerce so no validation error can echo the password.
+
+    Without the defaults, pydantic reports a missing field with the whole parent dict
+    as `input`, so POSTing {"password": "..."} alone returns the password verbatim in
+    the 422 body. Without the before-validator, a wrong-typed password is echoed the
+    same way. With both, no field-level 422 is reachable.
+
+    A body that is not an object at all (e.g. POST '"hunter2"') still produces a 422
+    echoing the raw body. Left as-is deliberately: only a caller sending the password
+    as the whole body can trigger it, the response goes only to that caller, and there
+    is no CORS policy that would let a browser read it cross-origin. Closing it would
+    mean hand-parsing JSON on the auth route or degrading 422s everywhere else.
+    """
+
+    email: str = ""
+    password: SecretStr = SecretStr("")
+
+    @field_validator("email", "password", mode="before")
+    @classmethod
+    def _as_text(cls, value: Any) -> str:
+        return "" if value is None else str(value)
 
 
 @dataclass
@@ -359,9 +383,38 @@ def normalized_git_remote(url: str) -> str:
     return normalized
 
 
+def _validate_catalog(data: dict[str, Any]) -> None:
+    workflows = data.get("workflows")
+    if not isinstance(workflows, list):
+        raise RuntimeError("Workflow catalog must contain a 'workflows' list.")
+
+    seen: set[str] = set()
+    for workflow in workflows:
+        if not isinstance(workflow, dict):
+            raise RuntimeError(f"Workflow entry is not an object: {workflow!r}")
+        workflow_id = workflow.get("id")
+        if not isinstance(workflow_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", workflow_id):
+            raise RuntimeError(f"Invalid workflow id: {workflow_id!r}")
+        if workflow_id in seen:
+            raise RuntimeError(f"Duplicate workflow id: {workflow_id}")
+        seen.add(workflow_id)
+
+
 def load_catalog(fresh: bool = False) -> dict[str, Any]:
     # The API decides which URLs this pod receives; the bundled file is the fallback.
     data = remote.fetch_catalog(fresh=fresh)
+    if data is not None:
+        try:
+            _validate_catalog(data)
+        except RuntimeError as exc:
+            # A malformed server response means standard speed, not a broken pod.
+            print(
+                f"10sorLabs launcher: remote catalog rejected ({exc}); "
+                f"using the bundled catalog.",
+                flush=True,
+            )
+            data = None
+
     if data is None:
         try:
             data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
@@ -369,19 +422,9 @@ def load_catalog(fresh: bool = False) -> dict[str, Any]:
             raise RuntimeError(f"Workflow catalog not found: {CATALOG_PATH}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Workflow catalog is invalid JSON: {exc}") from exc
+        # A broken image should fail loudly, so the bundled file still raises.
+        _validate_catalog(data)
 
-    workflows = data.get("workflows")
-    if not isinstance(workflows, list):
-        raise RuntimeError("Workflow catalog must contain a 'workflows' list.")
-
-    seen: set[str] = set()
-    for workflow in workflows:
-        workflow_id = workflow.get("id")
-        if not isinstance(workflow_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", workflow_id):
-            raise RuntimeError(f"Invalid workflow id: {workflow_id!r}")
-        if workflow_id in seen:
-            raise RuntimeError(f"Duplicate workflow id: {workflow_id}")
-        seen.add(workflow_id)
     return data
 
 
@@ -454,7 +497,7 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
         raise RuntimeError(f"Invalid URL for {file_spec.get('name', 'download')}")
 
     auth = file_spec.get("auth", "none")
-    headers = {"User-Agent": "10sorLabs-Model-Grabber/1.0"}
+    headers = {"User-Agent": "10sorLabs-Model-Grabber/1.1"}
 
     # Bind every credential to its own hosts. Without this a catalog served by the API
     # could name auth "huggingface" on an attacker's URL and be handed the pod's token.
@@ -1765,6 +1808,75 @@ async def add_custom_node(request: CustomNodeRequest) -> dict[str, Any]:
         return await custom_node_controller.enqueue(request.url)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def account_snapshot() -> dict[str, Any]:
+    # The credential itself is never part of this, masked or otherwise.
+    source = remote.credential_source()
+    return {
+        "configured": source != "none",
+        "source": source,
+        "status": remote.fetch_status(),
+    }
+
+
+@app.get("/api/account")
+async def account() -> dict[str, Any]:
+    # fetch_status blocks for up to ten seconds, so keep it off the event loop.
+    return await asyncio.to_thread(account_snapshot)
+
+
+@app.post("/api/account/login")
+async def account_login(request: AccountLoginRequest) -> dict[str, Any]:
+    if remote.credential_source() == "env":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This pod's licence key comes from the LCT_LICENSE_KEY template "
+                "variable. Remove it to sign in here instead."
+            ),
+        )
+
+    email = request.email.strip()
+    # str(SecretStr(...)) is '**********', so unwrap here rather than in remote.login.
+    password = request.password.get_secret_value()
+    if not email or not password:
+        # Deliberately the same message as a wrong password: telling the two apart
+        # would make this an account-enumeration oracle.
+        raise HTTPException(status_code=401, detail="Email or password not recognised.")
+
+    result = await asyncio.to_thread(remote.login, email, password)
+    if not result.get("ok"):
+        error = str(result.get("error", "Account service unavailable."))
+        # A missing service is misconfiguration, not a rejected credential.
+        status_code = 503 if error == "No account service configured." else 401
+        raise HTTPException(status_code=status_code, detail=error)
+
+    # Built from the login result rather than a second fetch_status call: one round
+    # trip, and the two answers cannot disagree.
+    return {
+        "configured": True,
+        "source": remote.credential_source(),
+        "status": {
+            key: result[key]
+            for key in ("tier", "email", "expires_at")
+            if key in result
+        },
+    }
+
+
+@app.post("/api/account/logout")
+async def account_logout() -> dict[str, Any]:
+    if remote.credential_source() == "env":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This pod's licence key comes from the LCT_LICENSE_KEY template "
+                "variable. There is nothing to sign out of."
+            ),
+        )
+    remote.write_credential("")
+    return await asyncio.to_thread(account_snapshot)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

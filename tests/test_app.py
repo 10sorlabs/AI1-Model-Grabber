@@ -57,6 +57,55 @@ def catalog_api(body: bytes, status: int = 200, captured: list | None = None):
         thread.join(timeout=2)
 
 
+class AccountApiStub:
+    """Records every request so tests can assert what actually went over the wire."""
+
+    def __init__(self) -> None:
+        self.login_bodies: list[dict] = []
+        self.paths: list[str] = []
+
+
+@contextlib.contextmanager
+def account_api(login_status: int = 200, login_body: dict | None = None):
+    stub = AccountApiStub()
+    payload = json.dumps(login_body if login_body is not None else {}).encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def _respond(self, status: int, body: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            stub.paths.append(self.path)
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                stub.login_bodies.append(json.loads(raw))
+            except ValueError:
+                stub.login_bodies.append({})
+            self._respond(login_status, payload if login_status == 200 else b"{}")
+
+        def do_GET(self) -> None:
+            stub.paths.append(self.path)
+            self._respond(200, json.dumps({"tier": "fast"}).encode("utf-8"))
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", stub
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def closed_port() -> int:
     server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
     port = server.server_port
@@ -1071,15 +1120,44 @@ def test_catalog_credential_prefers_the_env_var_over_the_token_file(
     assert captured[1].get("Authorization") == "Bearer file-key"
 
 
-def test_remote_catalog_with_a_bad_workflow_id_is_rejected(monkeypatch) -> None:
-    body = json.dumps(
-        {"version": 3, "workflows": [{"id": "Not A Valid Id", "files": []}]}
-    ).encode("utf-8")
+def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
+    monkeypatch,
+) -> None:
+    # One bad row from the API must mean standard speed, not a 500 on every pod.
+    for body in (
+        json.dumps(
+            {"version": 3, "workflows": [{"id": "Not A Valid Id", "files": []}]}
+        ).encode("utf-8"),
+        json.dumps({"version": 3, "workflows": ["oops"]}).encode("utf-8"),
+        json.dumps(
+            {
+                "version": 3,
+                "workflows": [
+                    {"id": "twice", "files": []},
+                    {"id": "twice", "files": []},
+                ],
+            }
+        ).encode("utf-8"),
+    ):
+        with catalog_api(body) as base:
+            monkeypatch.setenv("LCT_API_BASE", base)
+            launcher_remote._reset_state()
+            catalog = launcher_app.load_catalog(fresh=True)
+        assert len(catalog["workflows"]) == 6
 
-    with catalog_api(body) as base:
-        monkeypatch.setenv("LCT_API_BASE", base)
-        with pytest.raises(RuntimeError, match="Invalid workflow id"):
-            launcher_app.load_catalog(fresh=True)
+
+def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
+    # A broken image should fail loudly; only the remote path falls back.
+    broken = tmp_path / "workflows.json"
+    broken.write_text(
+        json.dumps({"version": 3, "workflows": [{"id": "Not A Valid Id"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+    monkeypatch.setattr(launcher_app, "CATALOG_PATH", broken)
+
+    with pytest.raises(RuntimeError, match="Invalid workflow id"):
+        launcher_app.load_catalog()
 
 
 def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
@@ -1532,6 +1610,262 @@ def test_huggingface_token_is_refused_for_a_foreign_host(monkeypatch) -> None:
                 "auth": "huggingface",
             }
         )
+
+
+def test_account_reports_no_credential(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / "absent.lct")
+
+    with TestClient(launcher_app.app) as client:
+        account = client.get("/api/account").json()
+
+    assert account == {"configured": False, "source": "none", "status": None}
+
+
+def test_signing_in_stores_the_token_and_sends_the_real_password(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with account_api(login_body={"token": "abc", "tier": "fast"}) as (base, stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            response = client.post(
+                "/api/account/login",
+                json={"email": " user@example.com ", "password": "hunter2"},
+            )
+            assert response.status_code == 200
+            signed_in = response.json()
+            account = client.get("/api/account").json()
+
+    # SecretStr stringifies to '**********'; without an explicit unwrap this is what
+    # the account service would receive, and login could never succeed.
+    assert stub.login_bodies == [{"email": "user@example.com", "password": "hunter2"}]
+    assert token_file.read_text(encoding="utf-8") == "abc"
+    assert signed_in["configured"] is True
+    assert signed_in["source"] == "file"
+    assert signed_in["status"]["tier"] == "fast"
+    assert account["configured"] is True
+    assert account["source"] == "file"
+    # One login means one round trip: no second /v1/status call to build the response.
+    assert stub.paths == ["/v1/auth/login", "/v1/status"]
+
+
+def test_no_account_route_ever_returns_the_credential(tmp_path, monkeypatch) -> None:
+    token_file = tmp_path / ".lct"
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with account_api(login_body={"token": "abc", "tier": "fast"}) as (base, _stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            bodies = [
+                client.post(
+                    "/api/account/login",
+                    json={"email": "user@example.com", "password": "hunter2"},
+                ).text,
+                client.get("/api/account").text,
+                client.post("/api/account/logout").text,
+            ]
+
+    for body in bodies:
+        assert "abc" not in body
+        assert "hunter2" not in body
+
+
+def test_signing_out_clears_the_token_file(tmp_path, monkeypatch) -> None:
+    token_file = tmp_path / ".lct"
+    token_file.write_text("abc", encoding="utf-8")
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with TestClient(launcher_app.app) as client:
+        account = client.post("/api/account/logout").json()
+
+    assert not token_file.exists()
+    assert account == {"configured": False, "source": "none", "status": None}
+
+
+def test_a_template_licence_key_cannot_be_signed_in_or_out(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    monkeypatch.setenv("LCT_LICENSE_KEY", "from-the-template")
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with account_api(login_body={"token": "abc"}) as (base, stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            login = client.post(
+                "/api/account/login",
+                json={"email": "user@example.com", "password": "hunter2"},
+            )
+            logout = client.post("/api/account/logout")
+
+    assert login.status_code == 409
+    assert logout.status_code == 409
+    assert "LCT_LICENSE_KEY" in login.json()["detail"]
+    assert not token_file.exists()
+    assert stub.login_bodies == []
+
+
+def test_rejected_credentials_leave_the_token_file_untouched(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    token_file.write_text("existing", encoding="utf-8")
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with account_api(login_status=401) as (base, _stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            response = client.post(
+                "/api/account/login",
+                json={"email": "user@example.com", "password": "wrong"},
+            )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Email or password not recognised."
+    assert token_file.read_text(encoding="utf-8") == "existing"
+
+
+def test_rate_limited_login_explains_the_wait(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / ".lct")
+
+    with account_api(login_status=429) as (base, _stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            response = client.post(
+                "/api/account/login",
+                json={"email": "user@example.com", "password": "hunter2"},
+            )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Too many attempts. Wait a minute."
+
+
+def test_login_without_an_api_base_is_a_503_and_makes_no_request(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / ".lct")
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("login must not reach the network without an API base.")
+
+    monkeypatch.setattr(launcher_remote.httpx, "post", explode)
+
+    assert launcher_remote.login("user@example.com", "hunter2") == {
+        "ok": False,
+        "error": "No account service configured.",
+    }
+
+    with TestClient(launcher_app.app) as client:
+        response = client.post(
+            "/api/account/login",
+            json={"email": "user@example.com", "password": "hunter2"},
+        )
+
+    # Misconfiguration, not a rejected credential.
+    assert response.status_code == 503
+
+
+def test_a_malformed_login_body_never_echoes_the_password(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / ".lct")
+
+    with account_api(login_status=401) as (base, stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            bodies = [
+                # No email: rejected before any request is made.
+                client.post("/api/account/login", json={"password": "hunter2"}),
+                # Wrong type: coerced to text rather than raising a 422 that would
+                # echo the value back.
+                client.post(
+                    "/api/account/login",
+                    json={"email": "user@example.com", "password": 12345},
+                ),
+                client.post("/api/account/login", json={}),
+            ]
+
+    for response in bodies:
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Email or password not recognised."
+        assert "hunter2" not in response.text
+        assert "12345" not in response.text
+
+    # An empty email never reaches the service; the coerced password does, as text.
+    assert stub.login_bodies == [{"email": "user@example.com", "password": "12345"}]
+
+
+def test_writing_a_credential_drops_the_cached_catalog(tmp_path, monkeypatch) -> None:
+    token_file = tmp_path / ".lct"
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+    captured: list = []
+
+    with catalog_api(remote_catalog_bytes(), captured=captured) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        assert launcher_remote.fetch_catalog() is not None
+        assert launcher_remote.fetch_catalog() is not None  # served from the cache
+        assert len(captured) == 1
+
+        launcher_remote.write_credential("a-different-key")
+        assert launcher_remote.fetch_catalog() is not None
+
+    assert len(captured) == 2
+    assert captured[1].get("Authorization") == "Bearer a-different-key"
+
+
+def test_writing_a_credential_does_not_reset_the_log_suppressors(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / ".lct")
+    monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
+
+    launcher_remote.fetch_catalog(fresh=True)
+    launcher_remote.write_credential("a-key")
+    capsys.readouterr()
+    launcher_remote.fetch_catalog(fresh=True)
+
+    # Same failure reason, already reported: a sign-in must not un-suppress it.
+    assert "Catalog API unavailable" not in capsys.readouterr().out
+
+
+def test_a_dead_status_endpoint_is_only_called_once_per_ttl(monkeypatch) -> None:
+    monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
+    attempts: list[str] = []
+
+    real_get = launcher_remote.httpx.get
+
+    def counting_get(url, **kwargs):
+        attempts.append(url)
+        return real_get(url, **kwargs)
+
+    monkeypatch.setattr(launcher_remote.httpx, "get", counting_get)
+
+    assert launcher_remote.fetch_status() is None
+    assert launcher_remote.fetch_status() is None
+
+    assert len(attempts) == 1
 
 
 def test_custom_node_ref_must_be_a_pinned_commit(tmp_path, monkeypatch) -> None:

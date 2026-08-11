@@ -28,7 +28,20 @@ const elements = {
   installedNodeState: document.querySelector("#installed-node-state"),
   customNodeRestart: document.querySelector("#custom-node-restart-button"),
   customNodeRestartError: document.querySelector("#custom-node-restart-error"),
+  tierBadge: document.querySelector("#tier-badge"),
+  accountState: document.querySelector("#account-state"),
+  accountForm: document.querySelector("#account-form"),
+  accountEmail: document.querySelector("#account-email"),
+  accountPassword: document.querySelector("#account-password"),
+  accountError: document.querySelector("#account-error"),
+  accountSummary: document.querySelector("#account-summary"),
+  accountSignin: document.querySelector("#account-signin"),
+  accountSignout: document.querySelector("#account-signout"),
 };
+
+// One list, used by both selectView and initialise. Keeping two copies is what let
+// a new view silently fall through to Workflows.
+const VIEW_NAMES = ["workflows", "custom-models", "custom-nodes", "account"];
 
 const runningStates = new Set(["running"]);
 let workflows = [];
@@ -72,7 +85,7 @@ function comfyUrl(serverUrl) {
 }
 
 function selectView(viewName, updateHash = true) {
-  const allowedViews = new Set(["workflows", "custom-models", "custom-nodes"]);
+  const allowedViews = new Set(VIEW_NAMES);
   const selected = allowedViews.has(viewName) ? viewName : "workflows";
   elements.views.forEach((view) => {
     view.hidden = view.dataset.view !== selected;
@@ -642,8 +655,108 @@ function beginCustomNodePolling() {
   }, 700);
 }
 
+function formatRenewal(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function renderAccount(account) {
+  const status = account.status || {};
+  const source = account.source || "none";
+  const fromTemplate = source === "env";
+
+  // A label only. It never disables, hides or alters any other control.
+  const tier = String(status.tier || "").toLowerCase();
+  elements.tierBadge.textContent =
+    tier === "fast" ? "Fast downloads active" : "Standard downloads";
+  elements.tierBadge.hidden = !account.configured;
+
+  if (fromTemplate) {
+    elements.accountState.textContent = "Licence key set on this pod's template";
+    elements.accountForm.hidden = true;
+    elements.accountSignin.hidden = true;
+    elements.accountSignout.hidden = true;
+    elements.accountSummary.textContent =
+      "Remove the LCT_LICENSE_KEY template variable to sign in here instead.";
+    elements.accountSummary.hidden = false;
+    return;
+  }
+
+  if (account.configured) {
+    const parts = [];
+    if (status.email) parts.push(String(status.email));
+    const renewal = formatRenewal(status.expires_at);
+    if (renewal) parts.push(`Renews ${renewal}`);
+    elements.accountState.textContent = "Signed in";
+    elements.accountForm.hidden = true;
+    elements.accountSignout.hidden = false;
+    elements.accountSummary.textContent = parts.join(" · ") || "Signed in on this pod.";
+    elements.accountSummary.hidden = false;
+    return;
+  }
+
+  elements.accountState.textContent = "Not signed in";
+  elements.accountForm.hidden = false;
+  elements.accountSignin.hidden = false;
+  elements.accountSignout.hidden = true;
+  elements.accountSummary.hidden = true;
+}
+
+async function loadAccount() {
+  renderAccount(await fetchJson("/api/account"));
+}
+
+async function signIn() {
+  elements.accountSignin.disabled = true;
+  elements.accountError.hidden = true;
+  try {
+    const account = await fetchJson("/api/account/login", {
+      method: "POST",
+      body: JSON.stringify({
+        email: elements.accountEmail.value.trim(),
+        password: elements.accountPassword.value,
+      }),
+    });
+    renderAccount(account);
+    await loadCatalog();
+  } catch (error) {
+    elements.accountError.textContent = error.message;
+    elements.accountError.hidden = false;
+  } finally {
+    // Cleared on both paths; the value never outlives the request.
+    elements.accountPassword.value = "";
+    elements.accountSignin.disabled = false;
+  }
+}
+
+async function signOut() {
+  elements.accountSignout.disabled = true;
+  elements.accountError.hidden = true;
+  try {
+    renderAccount(await fetchJson("/api/account/logout", { method: "POST" }));
+    await loadCatalog();
+  } catch (error) {
+    elements.accountError.textContent = error.message;
+    elements.accountError.hidden = false;
+  } finally {
+    elements.accountSignout.disabled = false;
+  }
+}
+
 elements.navLinks.forEach((link) => {
   link.addEventListener("click", () => selectView(link.dataset.viewTarget));
+});
+
+elements.accountSignin.addEventListener("click", signIn);
+elements.accountSignout.addEventListener("click", signOut);
+elements.accountPassword.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") signIn();
 });
 
 elements.cancel.addEventListener("click", async () => {
@@ -661,11 +774,14 @@ elements.customNodeRestart.addEventListener("click", restartComfyUI);
 
 async function initialise() {
   const requestedView = window.location.hash.replace("#", "");
-  const initialView = ["workflows", "custom-models", "custom-nodes"].includes(requestedView)
-    ? requestedView
-    : "workflows";
+  const initialView = VIEW_NAMES.includes(requestedView) ? requestedView : "workflows";
   selectView(initialView, false);
   await loadCatalog();
+  try {
+    await loadAccount();
+  } catch {
+    elements.accountState.textContent = "Account service unavailable";
+  }
   try {
     if (await loadCustomModels()) beginCustomPolling();
   } catch {
