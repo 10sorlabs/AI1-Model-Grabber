@@ -22,6 +22,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from launcher import remote
+
 
 SOURCE_ROOT = Path(
     os.getenv("LAUNCHER_SOURCE_ROOT", Path(__file__).resolve().parents[1])
@@ -37,6 +39,23 @@ CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
 COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstrip("/")
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
+
+# Resolved once; a file may only use the parallel downloader when this is present.
+ARIA2C_PATH = shutil.which("aria2c")
+if ARIA2C_PATH is None:
+    print(
+        "10sorLabs launcher: aria2c is not installed; "
+        "every file will download on a single connection.",
+        flush=True,
+    )
+
+# Hosts each credential may be sent to. The catalog can come from a remote API, so a
+# token is never applied on the strength of the file spec's `auth` field alone.
+AUTH_HOSTS = {
+    "huggingface": ("huggingface.co",),
+    "civitai": ("civitai.com",),
+    "github": ("github.com", "objects.githubusercontent.com"),
+}
 
 # Current built-in model locations from ComfyUI's folder_paths.py, plus the two
 # legacy physical directories that ComfyUI still searches for compatible files.
@@ -340,13 +359,16 @@ def normalized_git_remote(url: str) -> str:
     return normalized
 
 
-def load_catalog() -> dict[str, Any]:
-    try:
-        data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"Workflow catalog not found: {CATALOG_PATH}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Workflow catalog is invalid JSON: {exc}") from exc
+def load_catalog(fresh: bool = False) -> dict[str, Any]:
+    # The API decides which URLs this pod receives; the bundled file is the fallback.
+    data = remote.fetch_catalog(fresh=fresh)
+    if data is None:
+        try:
+            data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Workflow catalog not found: {CATALOG_PATH}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Workflow catalog is invalid JSON: {exc}") from exc
 
     workflows = data.get("workflows")
     if not isinstance(workflows, list):
@@ -365,6 +387,8 @@ def load_catalog() -> dict[str, Any]:
 
 def public_catalog() -> dict[str, Any]:
     catalog = load_catalog()
+    # Strictly an allowlist: url, destination, sha256, size_bytes, auth and parallel
+    # are install-time details and must never reach the browser.
     allowed = {
         "id",
         "title",
@@ -420,6 +444,10 @@ def huggingface_token() -> str:
         return ""
 
 
+def host_matches(hostname: str, allowed: tuple[str, ...]) -> bool:
+    return any(hostname == host or hostname.endswith(f".{host}") for host in allowed)
+
+
 def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     url = str(file_spec.get("url", "")).strip()
     if not url.startswith(("https://", "http://")):
@@ -427,6 +455,16 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
 
     auth = file_spec.get("auth", "none")
     headers = {"User-Agent": "10sorLabs-Model-Grabber/1.0"}
+
+    # Bind every credential to its own hosts. Without this a catalog served by the API
+    # could name auth "huggingface" on an attacker's URL and be handed the pod's token.
+    if auth in AUTH_HOSTS:
+        hostname = (urlsplit(url).hostname or "").lower()
+        if not host_matches(hostname, AUTH_HOSTS[auth]):
+            raise RuntimeError(
+                f"{file_spec.get('name', 'This file')}: {auth} credential refused "
+                f"for host {hostname or 'unknown'}."
+            )
 
     if auth == "huggingface":
         token = huggingface_token()
@@ -1254,66 +1292,110 @@ class JobController:
 
         url, headers = tokenized_request(file_spec)
         partial = destination.with_name(destination.name + ".part")
-        partial_size = partial.stat().st_size if partial.exists() else 0
-        if partial_size:
-            headers["Range"] = f"bytes={partial_size}-"
 
-        self.update(
-            stage="downloading",
-            message=f"Downloading {name}…",
-            current_file=name,
-            file_index=index + 1,
-            file_downloaded_bytes=partial_size,
-            file_total_bytes=expected_size,
+        # Never open more than one connection to a file that did not opt in:
+        # HuggingFace answers parallel range requests with 403 and collapses to
+        # ~394 KiB/s, which is worse than a single stream. `is True` rather than
+        # bool(): a catalog carrying "parallel": "false" would otherwise be truthy.
+        # Authenticated files stay on httpx as well — credentials passed to aria2c
+        # would be visible in the process argv.
+        auth = file_spec.get("auth", "none")
+        use_aria2 = (
+            file_spec.get("parallel") is True
+            and auth in (None, "", "none")
+            and ARIA2C_PATH is not None
         )
 
-        started = time.monotonic()
-        request_started_at = partial_size
-        try:
-            async with client.stream("GET", url, headers=headers) as response:
-                if response.status_code in {401, 403}:
-                    raise RuntimeError(
-                        f"Access denied while downloading {name}. Check the required token."
-                    )
-                if response.is_error:
-                    raise RuntimeError(
-                        f"Download failed for {name} (HTTP {response.status_code})."
-                    )
+        if use_aria2:
+            self.check_cancelled()
+            control = partial.with_name(partial.name + ".aria2")
+            if partial.exists() and not control.exists():
+                # aria2c only resumes a .part it wrote and can verify against its own
+                # control file. Without one this came from the httpx path or a crash.
+                partial.unlink(missing_ok=True)
+            start_size = partial.stat().st_size if partial.exists() else 0
 
-                resumed = response.status_code == 206 and partial_size > 0
-                mode = "ab" if resumed else "wb"
-                if not resumed:
-                    partial_size = 0
-                    request_started_at = 0
+            self.update(
+                stage="downloading",
+                message=f"Downloading {name}…",
+                current_file=name,
+                file_index=index + 1,
+                file_downloaded_bytes=start_size,
+                file_total_bytes=expected_size,
+            )
+            await self._download_with_aria2c(
+                url,
+                partial,
+                name,
+                index,
+                file_count,
+                completed_bytes,
+                known_total,
+                download_ceiling,
+                expected_size,
+                start_size,
+            )
+        else:
+            partial_size = partial.stat().st_size if partial.exists() else 0
+            if partial_size:
+                headers["Range"] = f"bytes={partial_size}-"
 
-                response_length = int(response.headers.get("content-length", "0") or 0)
-                file_total = expected_size or (partial_size + response_length)
-                current = partial_size
+            self.update(
+                stage="downloading",
+                message=f"Downloading {name}…",
+                current_file=name,
+                file_index=index + 1,
+                file_downloaded_bytes=partial_size,
+                file_total_bytes=expected_size,
+            )
 
-                with partial.open(mode) as handle:
-                    async for chunk in response.aiter_bytes(1024 * 1024):
-                        self.check_cancelled()
-                        handle.write(chunk)
-                        current += len(chunk)
-                        elapsed = max(time.monotonic() - started, 0.01)
-                        speed = (current - request_started_at) / elapsed
-                        file_fraction = current / file_total if file_total else 0
-                        overall_fraction = (
-                            (index + file_fraction) / max(file_count, 1)
+            started = time.monotonic()
+            request_started_at = partial_size
+            try:
+                async with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code in {401, 403}:
+                        raise RuntimeError(
+                            f"Access denied while downloading {name}. Check the required token."
                         )
-                        aggregate = completed_bytes + current
-                        self.update(
-                            file_downloaded_bytes=current,
-                            file_total_bytes=file_total,
-                            downloaded_bytes=aggregate,
-                            total_bytes=known_total or file_total,
-                            bytes_per_second=speed,
-                            percent=overall_fraction * download_ceiling,
+                    if response.is_error:
+                        raise RuntimeError(
+                            f"Download failed for {name} (HTTP {response.status_code})."
                         )
-        except httpx.RequestError as exc:
-            raise RuntimeError(
-                f"Network error while downloading {name} ({type(exc).__name__})."
-            ) from None
+
+                    resumed = response.status_code == 206 and partial_size > 0
+                    mode = "ab" if resumed else "wb"
+                    if not resumed:
+                        partial_size = 0
+                        request_started_at = 0
+
+                    response_length = int(response.headers.get("content-length", "0") or 0)
+                    file_total = expected_size or (partial_size + response_length)
+                    current = partial_size
+
+                    with partial.open(mode) as handle:
+                        async for chunk in response.aiter_bytes(1024 * 1024):
+                            self.check_cancelled()
+                            handle.write(chunk)
+                            current += len(chunk)
+                            elapsed = max(time.monotonic() - started, 0.01)
+                            speed = (current - request_started_at) / elapsed
+                            file_fraction = current / file_total if file_total else 0
+                            overall_fraction = (
+                                (index + file_fraction) / max(file_count, 1)
+                            )
+                            aggregate = completed_bytes + current
+                            self.update(
+                                file_downloaded_bytes=current,
+                                file_total_bytes=file_total,
+                                downloaded_bytes=aggregate,
+                                total_bytes=known_total or file_total,
+                                bytes_per_second=speed,
+                                percent=overall_fraction * download_ceiling,
+                            )
+            except httpx.RequestError as exc:
+                raise RuntimeError(
+                    f"Network error while downloading {name} ({type(exc).__name__})."
+                ) from None
 
         if expected_size and partial.stat().st_size != expected_size:
             raise RuntimeError(
@@ -1329,6 +1411,105 @@ class JobController:
 
         os.replace(partial, destination)
         return destination.stat().st_size
+
+    async def _download_with_aria2c(
+        self,
+        url: str,
+        partial: Path,
+        name: str,
+        index: int,
+        file_count: int,
+        completed_bytes: int,
+        known_total: int,
+        download_ceiling: float,
+        expected_size: int,
+        start_size: int,
+    ) -> None:
+        """Fetch one file on sixteen connections, then hand it back for verification.
+
+        aria2c's own output is never parsed and its checksum support is never used:
+        progress comes from the .part file's size, and the caller verifies the result
+        exactly as it does for a single stream.
+        """
+        started = time.monotonic()
+
+        async def poll_progress() -> None:
+            while True:
+                await asyncio.sleep(0.5)
+                try:
+                    current = partial.stat().st_size
+                except OSError:
+                    # aria2c does not create the .part file instantly.
+                    continue
+                elapsed = max(time.monotonic() - started, 0.01)
+                speed = (current - start_size) / elapsed
+                file_total = expected_size or current
+                # Without the guard a catalog that omits size_bytes would make
+                # file_total equal current on every tick and the bar would read 100%.
+                file_fraction = (current / file_total) if expected_size else 0.0
+                overall_fraction = (index + file_fraction) / max(file_count, 1)
+                aggregate = completed_bytes + current
+                self.update(
+                    file_downloaded_bytes=current,
+                    file_total_bytes=file_total,
+                    downloaded_bytes=aggregate,
+                    total_bytes=known_total or file_total,
+                    bytes_per_second=speed,
+                    percent=overall_fraction * download_ceiling,
+                )
+
+        process = await asyncio.create_subprocess_exec(
+            "aria2c",
+            "-x16",
+            "-s16",
+            "-k",
+            "100M",
+            "--continue=true",
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
+            "--summary-interval=0",
+            "--console-log-level=warn",
+            "-d",
+            str(partial.parent),
+            "-o",
+            partial.name,
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        poller = asyncio.create_task(poll_progress())
+        waiter = asyncio.create_task(process.communicate())
+        canceller = asyncio.create_task(self.cancel_event.wait())
+        try:
+            await asyncio.wait(
+                {waiter, canceller},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not waiter.done():
+                process.terminate()
+                try:
+                    # Shielded so the waiter survives the timeout and can still be
+                    # awaited after SIGKILL; otherwise the transport is never closed.
+                    await asyncio.wait_for(asyncio.shield(waiter), 5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await waiter
+                raise InstallCancelled()
+
+            output, _ = waiter.result()
+            if process.returncode:
+                tail = output.decode(errors="replace")[-500:] if output else ""
+                raise RuntimeError(
+                    f"aria2c failed for {name} (exit {process.returncode}). {tail}".strip()
+                )
+        finally:
+            # The poller must be dead before the caller writes "Verifying…", or its
+            # next tick overwrites that message and the stale speed with it.
+            for task in (poller, canceller, waiter):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(poller, canceller, waiter, return_exceptions=True)
 
     async def _run_process(self, *command: str | Path) -> tuple[int, str]:
         process = await asyncio.create_subprocess_exec(
@@ -1346,6 +1527,14 @@ class JobController:
         repo = str(node.get("repo", "")).strip()
         if not repo.startswith("https://github.com/"):
             raise RuntimeError(f"Custom node {name} must use a GitHub HTTPS URL.")
+        # A ref reaches git's argv, and anything starting with "-" is read as an
+        # option. Requiring a pinned commit makes that unreachable from a remote
+        # catalog; --end-of-options below covers the argv position itself.
+        ref = str(node.get("ref", "")).strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", ref, re.IGNORECASE):
+            raise RuntimeError(
+                f"Custom node {name} must pin a 40-character commit sha."
+            )
 
         destination = (CUSTOM_NODES_DIR / name).resolve()
         if not destination.is_relative_to(CUSTOM_NODES_DIR.resolve()):
@@ -1378,44 +1567,45 @@ class JobController:
                     f"The existing {name} folder is not the expected Git repository."
                 )
 
-        ref = str(node.get("ref", "")).strip()
-        if ref:
-            returncode, _ = await self._run_process(
-                "git",
-                "-C",
-                destination,
-                "cat-file",
-                "-e",
-                f"{ref}^{{commit}}",
-            )
-            if returncode:
-                returncode, output = await self._run_process(
-                    "git",
-                    "-C",
-                    destination,
-                    "fetch",
-                    "--no-tags",
-                    "--filter=blob:none",
-                    "origin",
-                    ref,
-                )
-                if returncode:
-                    raise RuntimeError(
-                        f"Could not fetch the pinned version for {name}: {output[-500:]}"
-                    )
-
+        returncode, _ = await self._run_process(
+            "git",
+            "-C",
+            destination,
+            "cat-file",
+            "-e",
+            "--end-of-options",
+            f"{ref}^{{commit}}",
+        )
+        if returncode:
             returncode, output = await self._run_process(
                 "git",
                 "-C",
                 destination,
-                "checkout",
-                "--detach",
+                "fetch",
+                "--no-tags",
+                "--filter=blob:none",
+                "--end-of-options",
+                "origin",
                 ref,
             )
             if returncode:
                 raise RuntimeError(
-                    f"Could not select the pinned version for {name}: {output[-500:]}"
+                    f"Could not fetch the pinned version for {name}: {output[-500:]}"
                 )
+
+        returncode, output = await self._run_process(
+            "git",
+            "-C",
+            destination,
+            "checkout",
+            "--detach",
+            "--end-of-options",
+            ref,
+        )
+        if returncode:
+            raise RuntimeError(
+                f"Could not select the pinned version for {name}: {output[-500:]}"
+            )
 
         self.state.restart_required = True
         requirements = destination / "requirements.txt"
@@ -1497,7 +1687,8 @@ async def health() -> dict[str, Any]:
 @app.get("/api/catalog")
 async def catalog() -> dict[str, Any]:
     try:
-        return public_catalog()
+        # Off the event loop: the catalog API call blocks for up to ten seconds.
+        return await asyncio.to_thread(public_catalog)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1509,7 +1700,8 @@ async def status() -> dict[str, Any]:
 
 @app.post("/api/install/{workflow_id}")
 async def install(workflow_id: str) -> dict[str, Any]:
-    catalog_data = load_catalog()
+    # fresh=True: the URLs the API hands back are time limited.
+    catalog_data = await asyncio.to_thread(load_catalog, True)
     workflow = next(
         (item for item in catalog_data["workflows"] if item["id"] == workflow_id),
         None,

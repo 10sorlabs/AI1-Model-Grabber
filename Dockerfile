@@ -24,6 +24,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /opt/10sorlabs
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends aria2 \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY requirements-launcher.txt /tmp/requirements-launcher.txt
 RUN python3.12 -m pip install \
       --break-system-packages \

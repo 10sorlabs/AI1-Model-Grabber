@@ -1,19 +1,110 @@
 import asyncio
+import contextlib
 import hashlib
 import importlib
+import json
 import os
 import re
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 
 os.environ["RUNPOD_POD_ID"] = "test-pod"
 
 launcher_app = importlib.import_module("launcher.app")
+launcher_remote = importlib.import_module("launcher.remote")
+
+
+@pytest.fixture(autouse=True)
+def reset_remote_catalog_state():
+    """The catalog cache and its one-shot log flags outlive a single test."""
+    launcher_remote._reset_state()
+    yield
+    launcher_remote._reset_state()
+
+
+@contextlib.contextmanager
+def catalog_api(body: bytes, status: int = 200, captured: list | None = None):
+    """Serve one canned response on 127.0.0.1 and yield its base URL."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if captured is not None:
+                captured.append(self.headers)
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def closed_port() -> int:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_port
+    server.server_close()
+    return port
+
+
+def remote_catalog_bytes(files: list | None = None) -> bytes:
+    if files is None:
+        files = [
+            {
+                "name": "Remote model",
+                "url": "https://cdn.example/remote.safetensors",
+                "destination": "models/checkpoints/remote.safetensors",
+                "size_bytes": 1024,
+                "sha256": "a" * 64,
+                "auth": "none",
+                "parallel": True,
+            }
+        ]
+    return json.dumps(
+        {
+            "version": 3,
+            "workflows": [
+                {
+                    "id": "remote-workflow",
+                    "title": "Remote Workflow",
+                    "description": "Served by the catalog API.",
+                    "estimated_size": "Approx. 1 KB",
+                    "files": files,
+                    "custom_nodes": [],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def download_one_file(controller, file_spec: dict, known_total: int = 0) -> int:
+    async def runner() -> int:
+        timeout = launcher_app.httpx.Timeout(connect=30, read=None, write=30, pool=30)
+        async with launcher_app.httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout
+        ) as client:
+            return await controller._download_file(
+                client, file_spec, 0, 1, 0, known_total, 99
+            )
+
+    return asyncio.run(runner())
 
 
 def test_health_and_public_catalog() -> None:
@@ -906,3 +997,563 @@ def test_comfyui_update_uses_official_master_and_runtime_python(
             str(comfy_dir / "requirements.txt"),
         ),
     ]
+
+
+def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+
+    assert launcher_remote.fetch_catalog() is None
+    assert len(launcher_app.load_catalog()["workflows"]) == 6
+
+
+def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / "absent.lct")
+
+    monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
+    launcher_remote._reset_state()
+    assert launcher_remote.fetch_catalog() is None
+    assert len(launcher_app.load_catalog()["workflows"]) == 6
+
+    with catalog_api(b"upstream exploded", status=500) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        launcher_remote._reset_state()
+        assert launcher_remote.fetch_catalog() is None
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
+
+    with catalog_api(b'{"workflows": [') as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        launcher_remote._reset_state()
+        assert launcher_remote.fetch_catalog() is None
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
+
+
+def test_catalog_request_omits_authorization_without_a_credential(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / "absent.lct")
+    captured: list = []
+
+    with catalog_api(remote_catalog_bytes(), captured=captured) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        assert launcher_remote.fetch_catalog() is not None
+
+    assert captured[0].get("Authorization") is None
+    assert captured[0].get("X-Pod-Id") == "test-pod"
+
+
+def test_catalog_credential_prefers_the_env_var_over_the_token_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    token_file.write_text("file-key\n", encoding="utf-8")
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+    captured: list = []
+
+    with catalog_api(remote_catalog_bytes(), captured=captured) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+
+        monkeypatch.setenv("LCT_LICENSE_KEY", "env-key")
+        launcher_remote._reset_state()
+        assert launcher_remote.fetch_catalog(fresh=True) is not None
+
+        monkeypatch.delenv("LCT_LICENSE_KEY")
+        launcher_remote._reset_state()
+        assert launcher_remote.fetch_catalog(fresh=True) is not None
+
+    assert captured[0].get("Authorization") == "Bearer env-key"
+    assert captured[1].get("Authorization") == "Bearer file-key"
+
+
+def test_remote_catalog_with_a_bad_workflow_id_is_rejected(monkeypatch) -> None:
+    body = json.dumps(
+        {"version": 3, "workflows": [{"id": "Not A Valid Id", "files": []}]}
+    ).encode("utf-8")
+
+    with catalog_api(body) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with pytest.raises(RuntimeError, match="Invalid workflow id"):
+            launcher_app.load_catalog(fresh=True)
+
+
+def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
+    monkeypatch,
+) -> None:
+    body = remote_catalog_bytes(
+        files=[
+            {
+                "name": "Unverifiable model",
+                "url": "https://cdn.example/unverifiable.safetensors",
+                "destination": "models/checkpoints/unverifiable.safetensors",
+                "size_bytes": 1024,
+                "auth": "none",
+            }
+        ]
+    )
+
+    with catalog_api(body) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        assert launcher_remote.fetch_catalog(fresh=True) is None
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
+
+
+def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
+    private = {"url", "destination", "sha256", "size_bytes", "auth", "parallel"}
+
+    with catalog_api(remote_catalog_bytes()) as base:
+        monkeypatch.setenv("LCT_API_BASE", base)
+        remote_public = launcher_app.public_catalog()
+
+    monkeypatch.delenv("LCT_API_BASE", raising=False)
+    launcher_remote._reset_state()
+    bundled_public = launcher_app.public_catalog()
+
+    for catalog in (remote_public, bundled_public):
+        assert catalog["workflows"]
+        for workflow in catalog["workflows"]:
+            assert not private & set(workflow)
+            assert "files" not in workflow
+            assert "custom_nodes" not in workflow
+
+
+def fake_aria2c(monkeypatch, payload: bytes, recorded: list, returncode: int = 0):
+    class FakeProcess:
+        def __init__(self, target) -> None:
+            self.target = target
+            self.returncode = returncode
+
+        async def communicate(self):
+            self.target.write_bytes(payload)
+            return b"", b""
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        recorded.append(argv)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1])
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+
+def test_parallel_file_downloads_through_aria2c(tmp_path, monkeypatch) -> None:
+    payload = b"aria2c-payload-" * 4096
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, payload, recorded)
+    controller = launcher_app.JobController()
+
+    written = download_one_file(
+        controller,
+        {
+            "name": "Parallel model",
+            "url": "https://cdn.example/parallel.safetensors",
+            "destination": "models/checkpoints/parallel.safetensors",
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "auth": "none",
+            "parallel": True,
+        },
+    )
+
+    destination = comfy_dir / "models" / "checkpoints" / "parallel.safetensors"
+    assert len(recorded) == 1
+    assert "-x16" in recorded[0]
+    assert "-s16" in recorded[0]
+    assert "--continue=true" in recorded[0]
+    assert not any(part.startswith("--header") for part in recorded[0])
+    assert destination.read_bytes() == payload
+    assert written == len(payload)
+    assert not destination.with_name(destination.name + ".part").exists()
+
+
+def test_files_not_flagged_parallel_stay_on_a_single_stream(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"single-stream-payload" * 2048
+    expected_hash = hashlib.sha256(payload).hexdigest()
+
+    class DownloadHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, b"", recorded)
+    controller = launcher_app.JobController()
+
+    # "false" is a non-empty string and 1 is truthy, so only an identity check on
+    # True keeps a server-side typo off the parallel path.
+    variants = [("missing", {}), ("string", {"parallel": "false"}), ("int", {"parallel": 1})]
+    try:
+        for label, extra in variants:
+            download_one_file(
+                controller,
+                {
+                    "name": f"Single {label}",
+                    "url": f"http://127.0.0.1:{server.server_port}/{label}",
+                    "destination": f"models/checkpoints/{label}.safetensors",
+                    "size_bytes": len(payload),
+                    "sha256": expected_hash,
+                    "auth": "none",
+                    **extra,
+                },
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert recorded == []
+    for label, _extra in variants:
+        assert (
+            comfy_dir / "models" / "checkpoints" / f"{label}.safetensors"
+        ).read_bytes() == payload
+
+
+def test_todays_catalog_shape_installs_entirely_over_httpx(tmp_path, monkeypatch) -> None:
+    payload = b"no-parallel-key-anywhere" * 2048
+    expected_hash = hashlib.sha256(payload).hexdigest()
+
+    class DownloadHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, b"", recorded)
+
+    body = remote_catalog_bytes(
+        files=[
+            {
+                "name": "Legacy model",
+                "url": f"http://127.0.0.1:{server.server_port}/legacy",
+                "destination": "models/checkpoints/legacy.safetensors",
+                "size_bytes": len(payload),
+                "sha256": expected_hash,
+                "auth": "none",
+            }
+        ]
+    )
+
+    controller = launcher_app.JobController()
+    try:
+        with catalog_api(body) as base:
+            monkeypatch.setenv("LCT_API_BASE", base)
+            catalog = launcher_app.load_catalog(fresh=True)
+        workflow = catalog["workflows"][0]
+        asyncio.run(controller._install_workflow(workflow))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert recorded == []
+    assert controller.state.warnings == []
+    assert (
+        comfy_dir / "models" / "checkpoints" / "legacy.safetensors"
+    ).read_bytes() == payload
+
+
+def test_parallel_file_falls_back_to_httpx_when_aria2c_is_absent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"no-aria2c-installed" * 2048
+    expected_hash = hashlib.sha256(payload).hexdigest()
+
+    class DownloadHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, b"", recorded)
+    controller = launcher_app.JobController()
+
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Parallel but unsupported",
+                "url": f"http://127.0.0.1:{server.server_port}/model",
+                "destination": "models/checkpoints/fallback.safetensors",
+                "size_bytes": len(payload),
+                "sha256": expected_hash,
+                "auth": "none",
+                "parallel": True,
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert recorded == []
+    assert (
+        comfy_dir / "models" / "checkpoints" / "fallback.safetensors"
+    ).read_bytes() == payload
+
+
+def test_aria2c_checksum_mismatch_aborts_and_keeps_the_part_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"corrupted-by-the-mirror" * 2048
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, payload, recorded)
+    controller = launcher_app.JobController()
+
+    with pytest.raises(RuntimeError, match="Checksum verification failed"):
+        download_one_file(
+            controller,
+            {
+                "name": "Tampered model",
+                "url": "https://cdn.example/tampered.safetensors",
+                "destination": "models/checkpoints/tampered.safetensors",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(b"what we actually asked for").hexdigest(),
+                "auth": "none",
+                "parallel": True,
+            },
+        )
+
+    destination = comfy_dir / "models" / "checkpoints" / "tampered.safetensors"
+    assert not destination.exists()
+    assert destination.with_name(destination.name + ".part").read_bytes() == payload
+
+
+def test_aria2c_progress_is_polled_from_the_part_file(tmp_path, monkeypatch) -> None:
+    payload = b"progress-payload" * 32768
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    class FakeProcess:
+        def __init__(self, target) -> None:
+            self.target = target
+            self.returncode = 0
+
+        async def communicate(self):
+            self.target.write_bytes(payload[: len(payload) // 2])
+            await asyncio.sleep(0.7)
+            self.target.write_bytes(payload)
+            return b"", b""
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1])
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+    controller = launcher_app.JobController()
+    observed: list[int] = []
+    speeds: list[float] = []
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        if "file_downloaded_bytes" in changes:
+            observed.append(changes["file_downloaded_bytes"])
+        if "bytes_per_second" in changes:
+            speeds.append(changes["bytes_per_second"])
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+
+    download_one_file(
+        controller,
+        {
+            "name": "Polled model",
+            "url": "https://cdn.example/polled.safetensors",
+            "destination": "models/checkpoints/polled.safetensors",
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "auth": "none",
+            "parallel": True,
+        },
+    )
+
+    # The poller reported real mid-flight progress rather than 0 then done.
+    assert any(0 < value < len(payload) for value in observed)
+    assert any(speed > 0 for speed in speeds)
+    assert 0 < controller.state.percent < 100
+    # …and it was already dead when the shared epilogue wrote the verify message,
+    # so the UI does not show a stale speed while the file is being hashed.
+    assert controller.state.message.startswith("Verifying")
+    assert controller.state.bytes_per_second == 0
+
+
+def test_cancelling_an_aria2c_download_terminates_the_process(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    controller = launcher_app.JobController()
+    signals: list[str] = []
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = None
+            self.stopped = asyncio.Event()
+
+        async def communicate(self):
+            await self.stopped.wait()
+            return b"", b""
+
+        def terminate(self) -> None:
+            signals.append("terminate")
+            self.returncode = -15
+            self.stopped.set()
+
+        def kill(self) -> None:
+            signals.append("kill")
+            self.returncode = -9
+            self.stopped.set()
+
+    async def fake_exec(*_command, **_kwargs):
+        # Cancel only once the process is live, so the branch's own pre-flight
+        # check_cancelled() is not what ends the download.
+        asyncio.get_running_loop().call_later(0.05, controller.cancel_event.set)
+        return FakeProcess()
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(launcher_app.InstallCancelled):
+        download_one_file(
+            controller,
+            {
+                "name": "Cancelled model",
+                "url": "https://cdn.example/cancelled.safetensors",
+                "destination": "models/checkpoints/cancelled.safetensors",
+                "size_bytes": 4096,
+                "sha256": "b" * 64,
+                "auth": "none",
+                "parallel": True,
+            },
+        )
+
+    assert signals == ["terminate"]
+    assert not (comfy_dir / "models" / "checkpoints" / "cancelled.safetensors").exists()
+
+
+def test_huggingface_token_is_refused_for_a_foreign_host(monkeypatch) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_only")
+
+    url, headers = launcher_app.tokenized_request(
+        {
+            "name": "Legitimate model",
+            "url": "https://huggingface.co/example/model/resolve/main/model.safetensors",
+            "auth": "huggingface",
+        }
+    )
+    assert headers["Authorization"] == "Bearer hf_test_only"
+
+    # A catalog served by the API must not be able to name a host of its choosing.
+    with pytest.raises(RuntimeError, match="credential refused"):
+        launcher_app.tokenized_request(
+            {
+                "name": "Exfiltration attempt",
+                "url": "https://attacker.example/collect.safetensors",
+                "auth": "huggingface",
+            }
+        )
+
+
+def test_custom_node_ref_must_be_a_pinned_commit(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+    commands: list = []
+
+    async def fake_process(*command) -> tuple[int, str]:
+        commands.append(tuple(str(part) for part in command))
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    with pytest.raises(RuntimeError, match="40-character commit sha"):
+        asyncio.run(
+            controller._install_custom_node(
+                {
+                    "name": "Evil-Node",
+                    "repo": "https://github.com/example/Evil-Node",
+                    "ref": "--upload-pack=touch /tmp/pwned",
+                }
+            )
+        )
+
+    assert commands == []
