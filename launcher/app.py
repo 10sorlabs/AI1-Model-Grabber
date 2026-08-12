@@ -546,6 +546,23 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     return url, headers
 
 
+def written_bytes(path: Path) -> int:
+    """Bytes actually on disk, not the file's extent.
+
+    aria2c -s16 writes sixteen ranges at their own offsets, so the file is sparse and
+    st_size reports the extent. st_blocks counts allocated blocks (512-byte units,
+    POSIX). This is a stat call - we still never parse aria2c's output. Windows has no
+    st_blocks; the extent is correct there because nothing on Windows runs a real
+    segmented download.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0
+    blocks = getattr(stat, "st_blocks", None)
+    return blocks * 512 if blocks is not None else stat.st_size
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1360,7 +1377,9 @@ class JobController:
                 # aria2c only resumes a .part it wrote and can verify against its own
                 # control file. Without one this came from the httpx path or a crash.
                 partial.unlink(missing_ok=True)
-            start_size = partial.stat().st_size if partial.exists() else 0
+            # Same units as the poller: a resumed .part is sparse, so measuring the
+            # baseline as an extent here would make the first speed reading negative.
+            start_size = written_bytes(partial)
 
             self.update(
                 stage="downloading",
@@ -1383,6 +1402,9 @@ class JobController:
                 start_size,
             )
         else:
+            # Deliberately st_size, not written_bytes(): this is a byte offset for a
+            # Range header, and blocks are not an offset. httpx writes sequentially, so
+            # extent and bytes written are the same number here anyway.
             partial_size = partial.stat().st_size if partial.exists() else 0
             if partial_size:
                 headers["Range"] = f"bytes={partial_size}-"
@@ -1444,6 +1466,8 @@ class JobController:
                     f"Network error while downloading {name} ({type(exc).__name__})."
                 ) from None
 
+        # Deliberately st_size, not written_bytes(): a finished file's extent is exactly
+        # its size, while blocks are rounded up and would fail this on every file.
         if expected_size and partial.stat().st_size != expected_size:
             raise RuntimeError(
                 f"{name} has the wrong size after download; it was left as a .part file."
@@ -1481,13 +1505,21 @@ class JobController:
         started = time.monotonic()
 
         async def poll_progress() -> None:
+            highest = start_size
             while True:
                 await asyncio.sleep(0.5)
-                try:
-                    current = partial.stat().st_size
-                except OSError:
-                    # aria2c does not create the .part file instantly.
-                    continue
+                # Returns 0 until aria2c creates the file; the monotonic guard below
+                # holds the reading at start_size rather than dropping it to zero.
+                current = written_bytes(partial)
+                if expected_size:
+                    # Whole-block rounding can overshoot the byte count near the end.
+                    # Cap before the max, or one over-rounded tick would pin `highest`
+                    # above expected_size and the bar would read past 100% for good.
+                    current = min(current, expected_size)
+                # ext4 delays allocation, so st_blocks can read lower than the previous
+                # tick. A bar that goes backwards looks broken.
+                highest = max(highest, current)
+                current = highest
                 elapsed = max(time.monotonic() - started, 0.01)
                 speed = (current - start_size) / elapsed
                 file_total = expected_size or current
@@ -1512,6 +1544,11 @@ class JobController:
             "-k",
             "100M",
             "--continue=true",
+            # Without this aria2c creates the file at full size before any bytes
+            # arrive, so the progress poll reads it as complete on the first tick -
+            # and pre-allocated blocks would make written_bytes() lie too. Write-once
+            # model files on a container disk; fragmentation does not matter here.
+            "--file-allocation=none",
             "--allow-overwrite=true",
             "--auto-file-renaming=false",
             "--summary-interval=0",

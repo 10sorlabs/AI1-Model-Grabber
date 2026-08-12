@@ -1539,6 +1539,128 @@ def test_aria2c_progress_is_polled_from_the_part_file(tmp_path, monkeypatch) -> 
     assert controller.state.bytes_per_second == 0
 
 
+def test_aria2c_progress_tracks_bytes_written_not_the_file_extent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Progress must follow allocated blocks, never the file's extent.
+
+    Observed on a real 12.2 GiB pod download on 2026-08-12: the bar sat at one value
+    for the whole transfer while bytes_per_second decayed 1302 -> 180 MiB/s, because
+    aria2c pre-allocates and -s16 writes sixteen ranges at their own offsets. The
+    extent inflation was reproduced locally - 16 x 64 KiB written reports st_size at
+    94.1%. The stat sequence below is stubbed so the arithmetic is deterministic on
+    every platform; the stub is not the only evidence.
+    """
+    segments = 16
+    block = 64 * 1024
+    total = 16 * 1024 * 1024
+    landed = segments * block
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    partial = comfy_dir / "segmented.safetensors.part"
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    # st_size, st_blocks * 512 - one entry per poll tick.
+    sequence = [
+        # Sparse mid-download: the extent is near-full, the blocks are not.
+        (total * 15 // 16 + block, landed),
+        # Whole-block rounding overshoots the byte count at the end.
+        (total, total + 4096),
+        # ext4 delayed allocation: blocks read lower than the previous tick.
+        (total, total // 2),
+    ]
+
+    class FakeStat:
+        def __init__(self, size: int, written: int) -> None:
+            self.st_size = size
+            self.st_blocks = written // 512
+
+    gate: dict = {}
+    stat_calls: list[int] = []
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self != partial:
+            return real_stat(self, *args, **kwargs)
+        index = min(len(stat_calls), len(sequence) - 1)
+        stat_calls.append(index)
+        if len(stat_calls) >= len(sequence) and "done" in gate:
+            gate["done"].set()
+        return FakeStat(*sequence[index])
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    class FakeProcess:
+        def __init__(self, target) -> None:
+            self.target = target
+            self.returncode = 0
+
+        async def communicate(self):
+            # What aria2c -s16 actually does: sixteen ranges, each written at its own
+            # offset, which extends the file well beyond the bytes delivered.
+            with open(self.target, "wb") as handle:
+                for segment in range(segments):
+                    handle.seek(segment * (total // segments))
+                    handle.write(b"x" * block)
+            # Outlive the stat sequence, so the finally cannot cancel the poller
+            # mid-run and leave the assertions racing the machine's speed.
+            await gate["done"].wait()
+            return b"", b""
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1])
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+    controller = launcher_app.JobController()
+    observed: list[int] = []
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        if "file_downloaded_bytes" in changes:
+            observed.append(changes["file_downloaded_bytes"])
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+
+    async def runner() -> None:
+        gate["done"] = asyncio.Event()
+        await controller._download_with_aria2c(
+            "https://cdn.example/segmented.safetensors",
+            partial,
+            "Segmented model",
+            0,
+            1,
+            0,
+            total,
+            99,
+            total,
+            0,
+        )
+
+    asyncio.run(runner())
+
+    assert len(stat_calls) >= len(sequence)
+    assert len(observed) >= 3
+
+    # The premise, measured rather than assumed: writing at offsets really does
+    # inflate the extent. os.stat is untouched by the Path.stat stub.
+    assert os.stat(partial).st_size > total * 0.9
+
+    # 1. Tracks the blocks, not the extent - the bug this test exists for.
+    assert observed[0] == landed
+    assert observed[0] < total * 0.5
+    # 2. Capped, so whole-block rounding cannot push percent past 100.
+    assert observed[1] == total
+    # 3. Never decreases, even when the block count reads lower than last tick.
+    assert observed[2] == total
+    assert controller.state.percent <= 99
+
+
 def test_cancelling_an_aria2c_download_terminates_the_process(
     tmp_path,
     monkeypatch,
