@@ -163,12 +163,13 @@ def _remember_failure(reason: str) -> None:
     return None
 
 
-def _remember_status(data: dict[str, Any] | None) -> dict[str, Any] | None:
+def _remember_status(reason: str, data: dict[str, Any] | None) -> dict[str, Any]:
     global _status_cache
+    result = {"reason": reason, "data": data}
     with _state_lock:
-        ttl = STATUS_TTL if data is not None else FAILURE_TTL
-        _status_cache = (time.monotonic() + ttl, data)
-    return data
+        ttl = STATUS_TTL if reason == "ok" else FAILURE_TTL
+        _status_cache = (time.monotonic() + ttl, result)
+    return result
 
 
 def _log_no_api_configured() -> None:
@@ -242,12 +243,20 @@ def fetch_catalog(fresh: bool = False) -> dict[str, Any] | None:
         return _remember_failure(type(exc).__name__)
 
 
-def fetch_status() -> dict[str, Any] | None:
-    """Cached like the catalog, so a dead API costs one timeout rather than one a call.
+def fetch_status() -> dict[str, Any]:
+    """Always a dict: {"reason": ..., "data": ...}. Never None.
 
-    GET /api/account calls this on every page load; without the failure cache a
-    configured-but-down service would stall the account view for the full timeout
-    every single time.
+    The reason matters as much as the data. Collapsing every failure into "no answer"
+    would make a revoked credential look identical to an outage, so the panel would
+    tell a lapsed subscriber to wait rather than to sign in again.
+
+      unconfigured   no API base - the normal state of a pod, nothing is wrong
+      unauthenticated  401 or 403 - the credential is no longer accepted
+      ok             200 with a dict body
+      unavailable    anything else, a network error, or a body we cannot read
+
+    Cached like the catalog, so a dead API costs one timeout rather than one a call:
+    GET /api/account calls this on every page load.
     """
     cached = _read_cache(status=True)
     if cached is not _MISS:
@@ -255,7 +264,7 @@ def fetch_status() -> dict[str, Any] | None:
 
     base = _api_base()
     if not base:
-        return None
+        return _remember_status("unconfigured", None)
 
     try:
         response = httpx.get(
@@ -263,12 +272,17 @@ def fetch_status() -> dict[str, Any] | None:
             headers=_auth_headers(),
             timeout=REQUEST_TIMEOUT,
         )
+        if response.status_code in {401, 403}:
+            return _remember_status("unauthenticated", None)
         if response.status_code != 200:
-            return _remember_status(None)
+            return _remember_status("unavailable", None)
         data = response.json()
     except Exception:
-        return _remember_status(None)
-    return _remember_status(data if isinstance(data, dict) else None)
+        return _remember_status("unavailable", None)
+
+    if not isinstance(data, dict):
+        return _remember_status("unavailable", None)
+    return _remember_status("ok", data)
 
 
 def login(email: str, password: str) -> dict[str, Any]:

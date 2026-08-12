@@ -157,6 +157,10 @@ class AccountLoginRequest(BaseModel):
     @field_validator("email", "password", mode="before")
     @classmethod
     def _as_text(cls, value: Any) -> str:
+        # From HTTP this is always raw JSON, but a SecretStr built in Python would
+        # otherwise stringify to '**********' - the same trap the route unwrap avoids.
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
         return "" if value is None else str(value)
 
 
@@ -1813,10 +1817,14 @@ async def add_custom_node(request: CustomNodeRequest) -> dict[str, Any]:
 def account_snapshot() -> dict[str, Any]:
     # The credential itself is never part of this, masked or otherwise.
     source = remote.credential_source()
+    status = remote.fetch_status()
     return {
         "configured": source != "none",
         "source": source,
-        "status": remote.fetch_status(),
+        "status": status["data"],
+        # Why there is no data, so the panel can tell a revoked credential from an
+        # outage and offer sign-in rather than telling the user to wait.
+        "service": status["reason"],
     }
 
 
@@ -1862,6 +1870,7 @@ async def account_login(request: AccountLoginRequest) -> dict[str, Any]:
             for key in ("tier", "email", "expires_at")
             if key in result
         },
+        "service": "ok",
     }
 
 

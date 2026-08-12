@@ -669,13 +669,26 @@ function formatRenewal(value) {
 function renderAccount(account) {
   const status = account.status || {};
   const source = account.source || "none";
+  const service = account.service || "ok";
   const fromTemplate = source === "env";
 
-  // A label only. It never disables, hides or alters any other control.
+  // An allowlist, not a fallback. Adding a tier name to the API contract means adding
+  // it here too, or the new tier silently reads as no badge at all.
   const tier = String(status.tier || "").toLowerCase();
-  elements.tierBadge.textContent =
-    tier === "fast" ? "Fast downloads active" : "Standard downloads";
-  elements.tierBadge.hidden = !account.configured;
+  const knownTier = tier === "fast" || tier === "standard";
+
+  // "Checking" only while a retry really is coming. If the service answered and named
+  // a tier we do not know, nothing is in flight and the label would sit there forever.
+  const showChecking = service === "unavailable";
+  const showTier = service === "ok" && knownTier;
+
+  // A label only. It never disables, hides or alters any other control.
+  elements.tierBadge.textContent = showTier
+    ? tier === "fast"
+      ? "Fast downloads active"
+      : "Standard downloads"
+    : "Checking subscription…";
+  elements.tierBadge.hidden = !account.configured || !(showChecking || showTier);
 
   if (fromTemplate) {
     elements.accountState.textContent = "Licence key set on this pod's template";
@@ -688,16 +701,35 @@ function renderAccount(account) {
     return;
   }
 
+  if (account.configured && service === "unauthenticated") {
+    // The credential was rejected, not lost. Offer the one action that helps, and
+    // keep Sign out so the dead token can be cleared rather than only overwritten.
+    elements.accountState.textContent = "Signed out — sign in again";
+    elements.accountForm.hidden = false;
+    elements.accountSignin.hidden = false;
+    elements.accountSignout.hidden = false;
+    elements.accountSummary.textContent =
+      "This licence key is no longer accepted. Sign in again to restore fast downloads.";
+    elements.accountSummary.hidden = false;
+    return;
+  }
+
   if (account.configured) {
+    elements.accountForm.hidden = true;
+    elements.accountSignout.hidden = false;
+    elements.accountSummary.hidden = false;
+    if (service === "unavailable") {
+      elements.accountState.textContent = "Account service unavailable";
+      elements.accountSummary.textContent =
+        "Your subscription could not be checked. Downloads will use the standard route until it can.";
+      return;
+    }
     const parts = [];
     if (status.email) parts.push(String(status.email));
     const renewal = formatRenewal(status.expires_at);
     if (renewal) parts.push(`Renews ${renewal}`);
     elements.accountState.textContent = "Signed in";
-    elements.accountForm.hidden = true;
-    elements.accountSignout.hidden = false;
     elements.accountSummary.textContent = parts.join(" · ") || "Signed in on this pod.";
-    elements.accountSummary.hidden = false;
     return;
   }
 
@@ -756,7 +788,9 @@ elements.navLinks.forEach((link) => {
 elements.accountSignin.addEventListener("click", signIn);
 elements.accountSignout.addEventListener("click", signOut);
 elements.accountPassword.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") signIn();
+  // The button records the in-flight state; holding Enter would otherwise fire
+  // concurrent logins and burn the account service's rate limit.
+  if (event.key === "Enter" && !elements.accountSignin.disabled) signIn();
 });
 
 elements.cancel.addEventListener("click", async () => {

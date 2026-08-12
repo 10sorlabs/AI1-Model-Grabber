@@ -66,7 +66,11 @@ class AccountApiStub:
 
 
 @contextlib.contextmanager
-def account_api(login_status: int = 200, login_body: dict | None = None):
+def account_api(
+    login_status: int = 200,
+    login_body: dict | None = None,
+    status_status: int = 200,
+):
     stub = AccountApiStub()
     payload = json.dumps(login_body if login_body is not None else {}).encode("utf-8")
 
@@ -90,6 +94,9 @@ def account_api(login_status: int = 200, login_body: dict | None = None):
 
         def do_GET(self) -> None:
             stub.paths.append(self.path)
+            if status_status != 200:
+                self._respond(status_status, b"{}")
+                return
             self._respond(200, json.dumps({"tier": "fast"}).encode("utf-8"))
 
         def log_message(self, *_args) -> None:
@@ -1620,7 +1627,12 @@ def test_account_reports_no_credential(tmp_path, monkeypatch) -> None:
     with TestClient(launcher_app.app) as client:
         account = client.get("/api/account").json()
 
-    assert account == {"configured": False, "source": "none", "status": None}
+    assert account == {
+        "configured": False,
+        "source": "none",
+        "status": None,
+        "service": "unconfigured",
+    }
 
 
 def test_signing_in_stores_the_token_and_sends_the_real_password(
@@ -1688,7 +1700,12 @@ def test_signing_out_clears_the_token_file(tmp_path, monkeypatch) -> None:
         account = client.post("/api/account/logout").json()
 
     assert not token_file.exists()
-    assert account == {"configured": False, "source": "none", "status": None}
+    assert account == {
+        "configured": False,
+        "source": "none",
+        "status": None,
+        "service": "unconfigured",
+    }
 
 
 def test_a_template_licence_key_cannot_be_signed_in_or_out(
@@ -1813,6 +1830,88 @@ def test_a_malformed_login_body_never_echoes_the_password(
     assert stub.login_bodies == [{"email": "user@example.com", "password": "12345"}]
 
 
+def test_a_signed_in_pod_reports_an_unreachable_status_service(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    token_file.write_text("abc", encoding="utf-8")
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+    monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
+
+    with TestClient(launcher_app.app) as client:
+        account = client.get("/api/account").json()
+
+    # The badge relies on this: a null status must never read as a stated tier.
+    assert account == {
+        "configured": True,
+        "source": "file",
+        "status": None,
+        "service": "unavailable",
+    }
+
+
+def test_a_revoked_credential_is_not_reported_as_an_outage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / ".lct"
+    token_file.write_text("stale-key", encoding="utf-8")
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: token_file)
+
+    with account_api(status_status=401) as (base, _stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            account = client.get("/api/account").json()
+
+    # The panel must offer sign-in again rather than tell the user to wait out an
+    # outage that is not happening.
+    assert account["configured"] is True
+    assert account["service"] == "unauthenticated"
+    assert account["status"] is None
+
+
+def test_a_login_that_states_no_tier_still_succeeds(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
+    monkeypatch.setattr(launcher_remote, "_token_file", lambda: tmp_path / ".lct")
+
+    with account_api(login_body={"token": "abc"}) as (base, _stub):
+        monkeypatch.setenv("LCT_API_BASE", base)
+        with TestClient(launcher_app.app) as client:
+            response = client.post(
+                "/api/account/login",
+                json={"email": "user@example.com", "password": "hunter2"},
+            )
+
+    assert response.status_code == 200
+    # An empty status is the service saying nothing, not the service saying standard.
+    assert response.json()["status"] == {}
+    assert response.json()["service"] == "ok"
+    assert "abc" not in response.text
+
+
+def test_the_tier_badge_never_infers_a_tier_from_silence() -> None:
+    """Guards the shape of renderAccount, not its behaviour.
+
+    There is no JS harness in this project, so this cannot prove the badge branches
+    correctly - only that the pattern which caused the bug has not come back. If it
+    fails, read renderAccount and decide whether the code or this test is wrong.
+    """
+    with TestClient(launcher_app.app) as client:
+        js = client.get("/app.js").text
+
+    render = js[
+        js.index("function renderAccount") : js.index("async function loadAccount")
+    ]
+
+    # The standard label needs an explicit tier match, so it is an allowlist rather
+    # than a fallback: an absent or unrecognised tier reaches neither label.
+    assert 'tier === "standard"' in render
+    assert "Checking subscription" in render
+
+
 def test_writing_a_credential_drops_the_cached_catalog(tmp_path, monkeypatch) -> None:
     token_file = tmp_path / ".lct"
     monkeypatch.delenv("LCT_LICENSE_KEY", raising=False)
@@ -1862,8 +1961,8 @@ def test_a_dead_status_endpoint_is_only_called_once_per_ttl(monkeypatch) -> None
 
     monkeypatch.setattr(launcher_remote.httpx, "get", counting_get)
 
-    assert launcher_remote.fetch_status() is None
-    assert launcher_remote.fetch_status() is None
+    assert launcher_remote.fetch_status() == {"reason": "unavailable", "data": None}
+    assert launcher_remote.fetch_status() == {"reason": "unavailable", "data": None}
 
     assert len(attempts) == 1
 
