@@ -59,10 +59,10 @@
         },
         {
           "name": "Face YOLOv8m",
-          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt",
+          "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt",
           "destination": "models/ultralytics/bbox/face_yolov8m.pt",
-          "size_bytes": 51996128,
-          "sha256": "e3893a92c5c1907136b6cc75404094db767c1e0cfefe1b43e87dad72af2e4c9f",
+          "size_bytes": 52026019,
+          "sha256": "717923c19b3f4bbf5250b728f1fa6b2cb72a33aed1d236ea9caf0e21ad943e5f",
           "auth": "none"
         }
       ],

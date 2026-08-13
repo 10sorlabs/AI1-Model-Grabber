@@ -764,6 +764,20 @@ def test_workflow_fetches_a_missing_pinned_custom_node_commit(
     assert any("checkout" in command and ref in command for command in commands)
     assert controller.state.restart_required is True
 
+    # git checkout reads --end-of-options as the argument to --detach and fails
+    # outright; the 40-hex validation is what keeps the ref from parsing as an
+    # option. cat-file and fetch do accept it, so they keep it.
+    checkout = next(command for command in commands if "checkout" in command)
+    assert "--detach" in checkout
+    assert ref in checkout
+    assert "--end-of-options" not in checkout
+    assert any(
+        "cat-file" in command and "--end-of-options" in command for command in commands
+    )
+    assert any(
+        "fetch" in command and "--end-of-options" in command for command in commands
+    )
+
 
 def test_workflow_skips_failed_custom_node_and_continues(
     tmp_path,
@@ -1258,9 +1272,28 @@ def test_parallel_file_downloads_through_aria2c(tmp_path, monkeypatch) -> None:
 
     destination = comfy_dir / "models" / "checkpoints" / "parallel.safetensors"
     assert len(recorded) == 1
-    assert "-x16" in recorded[0]
-    assert "-s16" in recorded[0]
-    assert "--continue=true" in recorded[0]
+    # The whole argv, so no flag can change silently. -k 4M keeps small files
+    # parallel and lets idle connections take over a straggler's tail;
+    # --file-allocation=none is what makes the progress poll measurable.
+    assert recorded[0][:12] == (
+        "aria2c",
+        "-x16",
+        "-s16",
+        "-k",
+        "4M",
+        "--continue=true",
+        "--file-allocation=none",
+        "--allow-overwrite=true",
+        "--auto-file-renaming=false",
+        "--summary-interval=0",
+        "--console-log-level=warn",
+        "-d",
+    )
+    assert recorded[0][-3:] == (
+        "-o",
+        "parallel.safetensors.part",
+        "https://cdn.example/parallel.safetensors",
+    )
     assert not any(part.startswith("--header") for part in recorded[0])
     assert destination.read_bytes() == payload
     assert written == len(payload)
@@ -1716,6 +1749,160 @@ def test_cancelling_an_aria2c_download_terminates_the_process(
 
     assert signals == ["terminate"]
     assert not (comfy_dir / "models" / "checkpoints" / "cancelled.safetensors").exists()
+
+
+def shared_payload_server(payload: bytes):
+    """A one-file HTTP server, used to prove a download did or did not happen."""
+
+    class DownloadHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def test_a_file_already_on_disk_elsewhere_is_linked_not_downloaded(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    # ComfyUI looks for the Qwen encoder in both text_encoders and clip, so the
+    # catalog lists it twice on purpose. Installing both workflows must not pull
+    # 8.66 GB twice.
+    payload = b"shared-encoder-payload" * 4096
+    digest = hashlib.sha256(payload).hexdigest()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    twin = comfy_dir / "models" / "text_encoders" / "qwen.safetensors"
+    twin.parent.mkdir(parents=True)
+    twin.write_bytes(payload)
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the file was already on disk; it must not be downloaded")
+
+    monkeypatch.setattr(launcher_app, "tokenized_request", refuse)
+
+    controller = launcher_app.JobController()
+    controller.shared_destinations = {
+        digest: [
+            "models/text_encoders/qwen.safetensors",
+            "models/clip/qwen.safetensors",
+        ]
+    }
+
+    written = download_one_file(
+        controller,
+        {
+            "name": "Qwen 3 8B text encoder",
+            "url": "https://cdn.example/qwen.safetensors",
+            "destination": "models/clip/qwen.safetensors",
+            "size_bytes": len(payload),
+            "sha256": digest,
+            "auth": "none",
+        },
+    )
+
+    linked = comfy_dir / "models" / "clip" / "qwen.safetensors"
+    assert linked.read_bytes() == payload
+    assert twin.read_bytes() == payload
+    assert written == len(payload)
+    assert not linked.with_name(linked.name + ".part").exists()
+    # Progress has to land too, or the bar sits still through the whole file.
+    assert controller.state.file_downloaded_bytes == len(payload)
+    assert controller.state.downloaded_bytes == len(payload)
+    assert controller.state.percent == 99
+
+
+def test_a_twin_that_is_not_on_disk_downloads_normally(tmp_path, monkeypatch) -> None:
+    payload = b"not-yet-anywhere" * 4096
+    digest = hashlib.sha256(payload).hexdigest()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    server, thread = shared_payload_server(payload)
+    controller = launcher_app.JobController()
+    controller.shared_destinations = {
+        digest: [
+            "models/text_encoders/qwen.safetensors",
+            "models/clip/qwen.safetensors",
+        ]
+    }
+
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Qwen 3 8B text encoder",
+                "url": f"http://127.0.0.1:{server.server_port}/qwen.safetensors",
+                "destination": "models/clip/qwen.safetensors",
+                "size_bytes": len(payload),
+                "sha256": digest,
+                "auth": "none",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert (comfy_dir / "models" / "clip" / "qwen.safetensors").read_bytes() == payload
+    assert not (comfy_dir / "models" / "text_encoders").exists()
+
+
+def test_a_twin_of_the_wrong_size_is_never_linked(tmp_path, monkeypatch) -> None:
+    payload = b"the-real-thing" * 4096
+    digest = hashlib.sha256(payload).hexdigest()
+    wrong = b"truncated remnant of an earlier download"
+
+    comfy_dir = tmp_path / "ComfyUI"
+    twin = comfy_dir / "models" / "text_encoders" / "qwen.safetensors"
+    twin.parent.mkdir(parents=True)
+    twin.write_bytes(wrong)
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    server, thread = shared_payload_server(payload)
+    controller = launcher_app.JobController()
+    controller.shared_destinations = {
+        digest: [
+            "models/text_encoders/qwen.safetensors",
+            "models/clip/qwen.safetensors",
+        ]
+    }
+
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Qwen 3 8B text encoder",
+                "url": f"http://127.0.0.1:{server.server_port}/qwen.safetensors",
+                "destination": "models/clip/qwen.safetensors",
+                "size_bytes": len(payload),
+                "sha256": digest,
+                "auth": "none",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert (comfy_dir / "models" / "clip" / "qwen.safetensors").read_bytes() == payload
+    # The wrong-sized file is left exactly as it was, not linked and not clobbered.
+    assert twin.read_bytes() == wrong
 
 
 def test_huggingface_token_is_refused_for_a_foreign_host(monkeypatch) -> None:

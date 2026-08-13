@@ -546,6 +546,58 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     return url, headers
 
 
+def shared_destinations(catalog: dict[str, Any]) -> dict[str, list[str]]:
+    """sha256 -> every destination in the catalog that claims it.
+
+    One file can legitimately be listed under two paths: ComfyUI looks for the Qwen
+    text encoder in both models/text_encoders and models/clip, so both entries are
+    correct and neither can be removed. Installing both workflows would otherwise pull
+    the same 8.66 GB twice. The duplicates are across workflows, so this has to be
+    built from the whole catalog rather than from one workflow's file list.
+    """
+    grouped: dict[str, list[str]] = {}
+    for workflow in catalog.get("workflows", []):
+        if not isinstance(workflow, dict):
+            continue
+        for file_spec in workflow.get("files", []) or []:
+            if not isinstance(file_spec, dict):
+                continue
+            # Normalised on insert and on lookup: one uppercase entry would disable
+            # this silently, and the file would just download twice with no error.
+            sha256 = str(file_spec.get("sha256", "")).lower().strip()
+            destination = str(file_spec.get("destination", "")).strip()
+            if not sha256 or not destination:
+                continue
+            paths = grouped.setdefault(sha256, [])
+            if destination not in paths:
+                paths.append(destination)
+    return {sha: paths for sha, paths in grouped.items() if len(paths) > 1}
+
+
+def link_or_copy(source: Path, target: Path) -> bool:
+    """Hard link source to target, falling back to a copy. False if neither worked.
+
+    A hard link costs no disk and both paths live under the same ComfyUI models tree,
+    so they are on one filesystem. copy2 covers a filesystem that does not support
+    links, and returning False rather than raising keeps this a pure optimisation.
+    """
+    try:
+        target.unlink(missing_ok=True)
+        try:
+            os.link(source, target)
+            return True
+        except OSError:
+            shutil.copy2(source, target)
+            return True
+    except Exception:
+        # Anything at all - out of disk part way through an 8 GB copy included.
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 def written_bytes(path: Path) -> int:
     """Bytes actually on disk, not the file's extent.
 
@@ -1054,6 +1106,8 @@ class JobController:
         self.task: asyncio.Task[None] | None = None
         self.cancel_event = asyncio.Event()
         self.lock = asyncio.Lock()
+        # sha256 -> other destinations claiming it, from shared_destinations().
+        self.shared_destinations: dict[str, list[str]] = {}
 
     def update(self, **changes: Any) -> None:
         for key, value in changes.items():
@@ -1064,13 +1118,18 @@ class JobController:
         self.state.warnings.append(warning)
         self.state.updated_at = utc_now()
 
-    async def start(self, workflow: dict[str, Any]) -> dict[str, Any]:
+    async def start(
+        self,
+        workflow: dict[str, Any],
+        shared: dict[str, list[str]] | None = None,
+    ) -> dict[str, Any]:
         async with self.lock:
             if self.task and not self.task.done():
                 raise HTTPException(status_code=409, detail="A workflow is already installing.")
             if workflow.get("disabled"):
                 raise HTTPException(status_code=400, detail="This workflow is not available yet.")
 
+            self.shared_destinations = shared or {}
             self.cancel_event = asyncio.Event()
             self.state = JobState(
                 status="running",
@@ -1354,8 +1413,62 @@ class JobController:
                 )
                 return completed
 
-        url, headers = tokenized_request(file_spec)
         partial = destination.with_name(destination.name + ".part")
+
+        # The same file can be listed under two destinations, so a second workflow
+        # would otherwise re-download gigabytes that are already on disk. Ahead of
+        # tokenized_request, so a linkable file needs no token at all.
+        twin = self._existing_twin(expected_sha, expected_size, destination)
+        if twin is not None:
+            self.update(
+                stage="downloading",
+                message=f"Linking {name} from {twin.name}…",
+                current_file=name,
+                file_index=index + 1,
+                file_downloaded_bytes=0,
+                file_total_bytes=expected_size,
+                bytes_per_second=0,
+            )
+            if await asyncio.to_thread(link_or_copy, twin, partial):
+                try:
+                    completed = await self._verify_and_place(
+                        partial, destination, expected_size, expected_sha, name
+                    )
+                except RuntimeError as exc:
+                    # A twin that does not verify is worth no more than no twin. Clear
+                    # it so the httpx branch cannot resume from a wrong-length .part.
+                    print(
+                        f"10sorLabs launcher: {name} could not be linked from "
+                        f"{twin} ({exc}); downloading it instead.",
+                        flush=True,
+                    )
+                    partial.unlink(missing_ok=True)
+                else:
+                    print(
+                        f"10sorLabs launcher: {name} linked from {twin} "
+                        f"instead of downloading it again.",
+                        flush=True,
+                    )
+                    fraction = (index + 1) / max(file_count, 1)
+                    self.update(
+                        current_file=name,
+                        file_index=index + 1,
+                        file_downloaded_bytes=completed,
+                        file_total_bytes=completed,
+                        downloaded_bytes=completed_bytes + completed,
+                        percent=fraction * download_ceiling,
+                        bytes_per_second=0,
+                        message=f"{name} linked from {twin.parent.name} — not downloaded again.",
+                    )
+                    return completed
+            else:
+                print(
+                    f"10sorLabs launcher: could not link {name} from {twin}; "
+                    f"downloading it instead.",
+                    flush=True,
+                )
+
+        url, headers = tokenized_request(file_spec)
 
         # Never open more than one connection to a file that did not opt in:
         # HuggingFace answers parallel range requests with 403 and collapses to
@@ -1466,6 +1579,46 @@ class JobController:
                     f"Network error while downloading {name} ({type(exc).__name__})."
                 ) from None
 
+        return await self._verify_and_place(
+            partial, destination, expected_size, expected_sha, name
+        )
+
+    def _existing_twin(
+        self,
+        expected_sha: str,
+        expected_size: int,
+        destination: Path,
+    ) -> Path | None:
+        """Another destination for the same sha256 that is already on disk, or None.
+
+        Requires a known size: without one there is nothing cheap to check before
+        committing to a copy, so it is safer to download.
+        """
+        if not expected_sha or not expected_size:
+            return None
+        for relative in self.shared_destinations.get(expected_sha.lower().strip(), ()):
+            try:
+                candidate = safe_destination(relative)
+            except RuntimeError:
+                continue
+            if candidate == destination:
+                continue
+            try:
+                if candidate.is_file() and candidate.stat().st_size == expected_size:
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    async def _verify_and_place(
+        self,
+        partial: Path,
+        destination: Path,
+        expected_size: int,
+        expected_sha: str,
+        name: str,
+    ) -> int:
+        """Size, checksum, move. Shared by the download and link paths alike."""
         # Deliberately st_size, not written_bytes(): a finished file's extent is exactly
         # its size, while blocks are rounded up and would fail this on every file.
         if expected_size and partial.stat().st_size != expected_size:
@@ -1541,8 +1694,16 @@ class JobController:
             "aria2c",
             "-x16",
             "-s16",
+            # aria2c uses at most min(-s, size / -k) pieces, and re-splits an idle
+            # connection's work only when the remainder is at least -k. At 100M a 50 MB
+            # file got one connection and a 230 MB LoRA got two, so they spent the
+            # transfer in TCP slow start; and a straggler with 80 MB left could not be
+            # re-split, so fifteen connections idled while one crawled - measured on a
+            # pod as 7.70 -> 7.72 -> 7.73 GB with the rate falling 157 -> 78 MB/s.
+            # Files at or above 1.6 GB are already capped at 16 by -s16, so this only
+            # adds parallelism where there was too little.
             "-k",
-            "100M",
+            "4M",
             "--continue=true",
             # Without this aria2c creates the file at full size before any bytes
             # arrive, so the progress poll reads it as complete on the first tick -
@@ -1612,8 +1773,10 @@ class JobController:
         if not repo.startswith("https://github.com/"):
             raise RuntimeError(f"Custom node {name} must use a GitHub HTTPS URL.")
         # A ref reaches git's argv, and anything starting with "-" is read as an
-        # option. Requiring a pinned commit makes that unreachable from a remote
-        # catalog; --end-of-options below covers the argv position itself.
+        # option. This validation is what makes that unreachable from a remote catalog:
+        # a [0-9a-f]{40} string cannot begin with "-". cat-file and fetch below also
+        # carry --end-of-options, but checkout must not - it reads the flag as the
+        # argument to --detach and fails outright on the git the pods run.
         ref = str(node.get("ref", "")).strip()
         if not re.fullmatch(r"[0-9a-f]{40}", ref, re.IGNORECASE):
             raise RuntimeError(
@@ -1683,7 +1846,9 @@ class JobController:
             destination,
             "checkout",
             "--detach",
-            "--end-of-options",
+            # No --end-of-options here: git checkout reads it as the argument to
+            # --detach ("does not take a path argument"). The 40-hex validation above
+            # is what keeps this ref from ever being parsed as an option.
             ref,
         )
         if returncode:
@@ -1792,7 +1957,8 @@ async def install(workflow_id: str) -> dict[str, Any]:
     )
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found.")
-    return await controller.start(workflow)
+    # Built from the whole catalog: the duplicates worth linking are cross-workflow.
+    return await controller.start(workflow, shared_destinations(catalog_data))
 
 
 @app.post("/api/cancel")
