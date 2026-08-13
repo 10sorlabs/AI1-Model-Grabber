@@ -1275,7 +1275,7 @@ def test_parallel_file_downloads_through_aria2c(tmp_path, monkeypatch) -> None:
     # The whole argv, so no flag can change silently. -k 4M keeps small files
     # parallel and lets idle connections take over a straggler's tail;
     # --file-allocation=none is what makes the progress poll measurable.
-    assert recorded[0][:12] == (
+    assert recorded[0][:11] == (
         "aria2c",
         "-x16",
         "-s16",
@@ -1287,8 +1287,10 @@ def test_parallel_file_downloads_through_aria2c(tmp_path, monkeypatch) -> None:
         "--auto-file-renaming=false",
         "--summary-interval=0",
         "--console-log-level=warn",
-        "-d",
     )
+    # Verified as it writes, so the file is never read back to hash it.
+    assert recorded[0][11] == f"--checksum=sha-256={hashlib.sha256(payload).hexdigest()}"
+    assert recorded[0][12] == "-d"
     assert recorded[0][-3:] == (
         "-o",
         "parallel.safetensors.part",
@@ -1482,8 +1484,15 @@ def test_aria2c_checksum_mismatch_aborts_and_keeps_the_part_file(
     monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
 
     recorded: list = []
-    fake_aria2c(monkeypatch, payload, recorded)
+    # Exit 32 is aria2c's own "checksum validation failed".
+    fake_aria2c(monkeypatch, payload, recorded, returncode=32)
     controller = launcher_app.JobController()
+
+    destination = comfy_dir / "models" / "checkpoints" / "tampered.safetensors"
+    partial = destination.with_name(destination.name + ".part")
+    control = partial.with_name(partial.name + ".aria2")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    control.write_bytes(b"aria2 control")
 
     with pytest.raises(RuntimeError, match="Checksum verification failed"):
         download_one_file(
@@ -1499,9 +1508,48 @@ def test_aria2c_checksum_mismatch_aborts_and_keeps_the_part_file(
             },
         )
 
-    destination = comfy_dir / "models" / "checkpoints" / "tampered.safetensors"
     assert not destination.exists()
-    assert destination.with_name(destination.name + ".part").read_bytes() == payload
+    # Bytes aria2c has declared corrupt must not survive to be resumed from, by
+    # aria2c or by the httpx branch, so the .part and its control file both go.
+    assert not partial.exists()
+    assert not control.exists()
+
+
+def test_a_non_checksum_aria2c_failure_keeps_the_partial_for_resume(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"interrupted-transfer" * 2048
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    # Exit 1: a dropped connection, a timeout, a 5xx - not corruption.
+    fake_aria2c(monkeypatch, payload, recorded, returncode=1)
+    controller = launcher_app.JobController()
+
+    with pytest.raises(RuntimeError, match="aria2c failed"):
+        download_one_file(
+            controller,
+            {
+                "name": "Interrupted model",
+                "url": "https://cdn.example/interrupted.safetensors",
+                "destination": "models/checkpoints/interrupted.safetensors",
+                "size_bytes": len(payload) * 4,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "auth": "none",
+                "parallel": True,
+            },
+        )
+
+    partial = (
+        comfy_dir / "models" / "checkpoints" / "interrupted.safetensors.part"
+    )
+    # --continue=true exists to resume this. Deleting it would make a network blip
+    # cost a full re-download - up to 63 GB for the largest workflow.
+    assert partial.exists()
 
 
 def test_aria2c_progress_is_polled_from_the_part_file(tmp_path, monkeypatch) -> None:
@@ -1549,27 +1597,44 @@ def test_aria2c_progress_is_polled_from_the_part_file(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(controller, "update", recording_update)
 
-    download_one_file(
-        controller,
-        {
-            "name": "Polled model",
-            "url": "https://cdn.example/polled.safetensors",
-            "destination": "models/checkpoints/polled.safetensors",
-            "size_bytes": len(payload),
-            "sha256": hashlib.sha256(payload).hexdigest(),
-            "auth": "none",
-            "parallel": True,
-        },
-    )
+    settled: list[int] = []
+
+    async def runner() -> None:
+        timeout = launcher_app.httpx.Timeout(connect=30, read=None, write=30, pool=30)
+        async with launcher_app.httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout
+        ) as client:
+            await controller._download_file(
+                client,
+                {
+                    "name": "Polled model",
+                    "url": "https://cdn.example/polled.safetensors",
+                    "destination": "models/checkpoints/polled.safetensors",
+                    "size_bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "auth": "none",
+                    "parallel": True,
+                },
+                0,
+                1,
+                0,
+                len(payload),
+                99,
+            )
+        settled.append(len(observed))
+        # Longer than the 0.5s poll interval: a poller still alive would tick here.
+        await asyncio.sleep(0.7)
+
+    asyncio.run(runner())
 
     # The poller reported real mid-flight progress rather than 0 then done.
     assert any(0 < value < len(payload) for value in observed)
     assert any(speed > 0 for speed in speeds)
     assert 0 < controller.state.percent < 100
-    # …and it was already dead when the shared epilogue wrote the verify message,
-    # so the UI does not show a stale speed while the file is being hashed.
-    assert controller.state.message.startswith("Verifying")
-    assert controller.state.bytes_per_second == 0
+    # …and it was dead before the caller moved on. The old form of this assertion
+    # watched for the "Verifying…" message, which no longer exists on this path now
+    # that aria2c checksums as it writes.
+    assert len(observed) == settled[0]
 
 
 def test_aria2c_progress_tracks_bytes_written_not_the_file_extent(
@@ -1768,6 +1833,351 @@ def shared_payload_server(payload: bytes):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
+
+
+def test_no_checksum_flag_when_the_catalog_entry_has_no_sha256(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"unverifiable-payload" * 2048
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, payload, recorded)
+    controller = launcher_app.JobController()
+
+    download_one_file(
+        controller,
+        {
+            "name": "Unverifiable model",
+            "url": "https://cdn.example/unverifiable.safetensors",
+            "destination": "models/checkpoints/unverifiable.safetensors",
+            "size_bytes": len(payload),
+            "auth": "none",
+            "parallel": True,
+        },
+    )
+
+    # Nothing to verify against, so the argv is exactly what it was before.
+    assert not any(part.startswith("--checksum") for part in recorded[0])
+
+
+def test_an_aria2c_verified_file_is_never_hashed_again(tmp_path, monkeypatch) -> None:
+    payload = b"already-verified-by-aria2c" * 2048
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+
+    recorded: list = []
+    fake_aria2c(monkeypatch, payload, recorded)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("aria2c verified this file; it must not be hashed again")
+
+    monkeypatch.setattr(launcher_app, "file_sha256", refuse)
+    controller = launcher_app.JobController()
+
+    written = download_one_file(
+        controller,
+        {
+            "name": "Verified model",
+            "url": "https://cdn.example/verified.safetensors",
+            "destination": "models/checkpoints/verified.safetensors",
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "auth": "none",
+            "parallel": True,
+        },
+    )
+
+    assert written == len(payload)
+    assert (
+        comfy_dir / "models" / "checkpoints" / "verified.safetensors"
+    ).read_bytes() == payload
+
+
+def test_an_aria2c_that_rejects_the_checksum_option_degrades_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"older-aria2c-build" * 2048
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+    monkeypatch.setattr(launcher_app, "ARIA2C_SUPPORTS_CHECKSUM", True)
+
+    recorded: list = []
+
+    class FakeProcess:
+        def __init__(self, target, argv) -> None:
+            self.target = target
+            self.argv = argv
+            self.returncode = 0
+
+        async def communicate(self):
+            if any(part.startswith("--checksum") for part in self.argv):
+                self.returncode = 1
+                return (
+                    b"aria2c: unrecognized option '--checksum=sha-256=abc'\n",
+                    b"",
+                )
+            self.target.write_bytes(payload)
+            return b"", b""
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        recorded.append(argv)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1], argv)
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+    controller = launcher_app.JobController()
+
+    written = download_one_file(
+        controller,
+        {
+            "name": "Legacy aria2c model",
+            "url": "https://cdn.example/legacy.safetensors",
+            "destination": "models/checkpoints/legacy.safetensors",
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "auth": "none",
+            "parallel": True,
+        },
+    )
+
+    # An option this build does not know must cost one retry, not the whole install.
+    assert len(recorded) == 2
+    assert any(part.startswith("--checksum") for part in recorded[0])
+    assert not any(part.startswith("--checksum") for part in recorded[1])
+    assert launcher_app.ARIA2C_SUPPORTS_CHECKSUM is False
+    # And the file is still verified - by the Python hash, on the second pass.
+    assert written == len(payload)
+    assert (
+        comfy_dir / "models" / "checkpoints" / "legacy.safetensors"
+    ).read_bytes() == payload
+
+
+def test_the_httpx_path_hashes_inline_and_catches_a_mismatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"streamed-and-hashed" * 4096
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the bytes were hashed inline; no re-read is allowed")
+
+    monkeypatch.setattr(launcher_app, "file_sha256", refuse)
+
+    server, thread = shared_payload_server(payload)
+    controller = launcher_app.JobController()
+    try:
+        written = download_one_file(
+            controller,
+            {
+                "name": "Streamed model",
+                "url": f"http://127.0.0.1:{server.server_port}/streamed",
+                "destination": "models/checkpoints/streamed.safetensors",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "auth": "none",
+            },
+        )
+        assert written == len(payload)
+        assert (
+            comfy_dir / "models" / "checkpoints" / "streamed.safetensors"
+        ).read_bytes() == payload
+
+        with pytest.raises(RuntimeError, match="Checksum verification failed"):
+            download_one_file(
+                controller,
+                {
+                    "name": "Wrong checksum model",
+                    "url": f"http://127.0.0.1:{server.server_port}/streamed",
+                    "destination": "models/checkpoints/wrong.safetensors",
+                    "size_bytes": len(payload),
+                    "sha256": hashlib.sha256(b"a different file").hexdigest(),
+                    "auth": "none",
+                },
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def resumable_server(payload: bytes, honour_range: bool):
+    """Serves payload, optionally honouring Range with a 206."""
+    seen_ranges: list = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requested = self.headers.get("Range")
+            seen_ranges.append(requested)
+            if honour_range and requested:
+                start = int(requested.split("=")[1].split("-")[0])
+                body = payload[start:]
+                self.send_response(206)
+                self.send_header(
+                    "Content-Range",
+                    f"bytes {start}-{len(payload) - 1}/{len(payload)}",
+                )
+            else:
+                body = payload
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, seen_ranges
+
+
+def test_a_resumed_download_hashes_the_whole_file_not_just_the_tail(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"resume-me-completely" * 4096
+    comfy_dir = tmp_path / "ComfyUI"
+    destination_dir = comfy_dir / "models" / "checkpoints"
+    destination_dir.mkdir(parents=True)
+    partial = destination_dir / "resumed.safetensors.part"
+    partial.write_bytes(payload[: len(payload) // 2])
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the digest must come from the inline hash, not a re-read")
+
+    monkeypatch.setattr(launcher_app, "file_sha256", refuse)
+
+    server, thread, seen = resumable_server(payload, honour_range=True)
+    controller = launcher_app.JobController()
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Resumed model",
+                "url": f"http://127.0.0.1:{server.server_port}/resumed",
+                "destination": "models/checkpoints/resumed.safetensors",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "auth": "none",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    # It really did resume, and the digest still covered the bytes already on disk.
+    assert seen == [f"bytes={len(payload) // 2}-"]
+    assert (destination_dir / "resumed.safetensors").read_bytes() == payload
+
+
+def test_a_server_that_ignores_range_is_not_hashed_against_the_stale_partial(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    # The trap: the seed can only be decided after the response arrives. A 200 means
+    # the write truncates, so folding the old .part into the hash would digest bytes
+    # that never reach the finished file.
+    payload = b"start-over-please" * 4096
+    comfy_dir = tmp_path / "ComfyUI"
+    destination_dir = comfy_dir / "models" / "checkpoints"
+    destination_dir.mkdir(parents=True)
+    partial = destination_dir / "restarted.safetensors.part"
+    partial.write_bytes(b"stale bytes from an earlier attempt")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the digest must come from the inline hash, not a re-read")
+
+    monkeypatch.setattr(launcher_app, "file_sha256", refuse)
+
+    server, thread, seen = resumable_server(payload, honour_range=False)
+    controller = launcher_app.JobController()
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Restarted model",
+                "url": f"http://127.0.0.1:{server.server_port}/restarted",
+                "destination": "models/checkpoints/restarted.safetensors",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "auth": "none",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert seen == ["bytes=35-"]
+    assert (destination_dir / "restarted.safetensors").read_bytes() == payload
+
+
+def test_the_httpx_path_never_resumes_an_aria2c_partial(tmp_path, monkeypatch) -> None:
+    payload = b"sparse-partial-trap" * 4096
+    comfy_dir = tmp_path / "ComfyUI"
+    destination_dir = comfy_dir / "models" / "checkpoints"
+    destination_dir.mkdir(parents=True)
+    partial = destination_dir / "sparse.safetensors.part"
+    control = destination_dir / "sparse.safetensors.part.aria2"
+    # An aria2c partial: st_size is already the full length, the data is not there.
+    with partial.open("wb") as handle:
+        handle.seek(len(payload) - 1)
+        handle.write(b"\0")
+    control.write_bytes(b"aria2 control")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", None)
+
+    server, thread, seen = resumable_server(payload, honour_range=True)
+    controller = launcher_app.JobController()
+    try:
+        download_one_file(
+            controller,
+            {
+                "name": "Sparse partial model",
+                "url": f"http://127.0.0.1:{server.server_port}/sparse",
+                "destination": "models/checkpoints/sparse.safetensors",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "auth": "none",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    # No Range at all: the aria2c partial was discarded rather than resumed from,
+    # which would have sent bytes=<full length>- and hashed a file of zeroes.
+    assert seen == [None]
+    assert not control.exists()
+    assert (destination_dir / "sparse.safetensors").read_bytes() == payload
 
 
 def test_a_file_already_on_disk_elsewhere_is_linked_not_downloaded(

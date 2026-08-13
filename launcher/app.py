@@ -42,6 +42,9 @@ DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
 # Resolved once; a file may only use the parallel downloader when this is present.
 ARIA2C_PATH = shutil.which("aria2c")
+# Cleared for the rest of the process the first time an aria2c build refuses
+# --checksum, so an unexpected option can never break more than one download.
+ARIA2C_SUPPORTS_CHECKSUM = True
 if ARIA2C_PATH is None:
     print(
         "10sorLabs launcher: aria2c is not installed; "
@@ -615,12 +618,80 @@ def written_bytes(path: Path) -> int:
     return blocks * 512 if blocks is not None else stat.st_size
 
 
-def file_sha256(path: Path) -> str:
+def file_sha256(path: Path, on_progress: Any = None) -> str:
+    """Hash a file, optionally reporting bytes read so far.
+
+    The callback exists so a multi-gigabyte hash does not freeze the panel. It runs on
+    whichever thread calls this, which is an asyncio.to_thread worker.
+    """
     digest = hashlib.sha256()
+    read = 0
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
+            if on_progress is not None:
+                read += len(chunk)
+                on_progress(read)
     return digest.hexdigest()
+
+
+def seed_hash_from_partial(digest: Any, path: Path, byte_count: int) -> None:
+    """Fold the bytes already on disk into a running hash before a resume.
+
+    Reads exactly byte_count bytes: the Range request continues from that offset, so
+    anything past it is not part of what the server is about to append.
+    """
+    remaining = byte_count
+    with path.open("rb") as handle:
+        while remaining > 0:
+            chunk = handle.read(min(8 * 1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+
+
+def human_bytes(count: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(count) < 1024 or unit == "GB":
+            return f"{count:.2f} {unit}" if unit == "GB" else f"{count:.0f} {unit}"
+        count /= 1024
+    return f"{count:.2f} GB"
+
+
+def transfer_phrase(
+    verb: str,
+    byte_count: int,
+    seconds: float,
+    note: str = "",
+) -> str:
+    """'downloaded 13.14 GB in 35.4s (371 MB/s, hashed inline)'"""
+    rate = byte_count / seconds if seconds > 0.001 else 0
+    suffix = f", {note}" if note else ""
+    return (
+        f"{verb} {human_bytes(byte_count)} in {seconds:.1f}s "
+        f"({human_bytes(rate)}/s{suffix})"
+    )
+
+
+def rejects_checksum_option(output: str) -> bool:
+    """True when aria2c refused the --checksum option itself.
+
+    Narrow on purpose: the message must name an option-parsing failure *and* mention
+    checksum, so a 5xx, a timeout or a genuine mismatch is never mistaken for one.
+    """
+    lowered = output.lower()
+    if "checksum" not in lowered:
+        return False
+    return any(
+        phrase in lowered
+        for phrase in (
+            "unrecognized option",
+            "unrecognised option",
+            "unknown option",
+            "invalid option",
+        )
+    )
 
 
 class CustomModelController:
@@ -1392,13 +1463,22 @@ class JobController:
         destination.parent.mkdir(parents=True, exist_ok=True)
         expected_size = max(0, int(file_spec.get("size_bytes", 0)))
         expected_sha = str(file_spec.get("sha256", "")).lower().strip()
+        file_started = time.monotonic()
+        source_url = str(file_spec.get("url", ""))
 
         if destination.exists() and destination.stat().st_size > 0:
             size_matches = not expected_size or destination.stat().st_size == expected_size
+            verify_started = time.monotonic()
             hash_matches = (
                 not expected_sha
-                or await asyncio.to_thread(file_sha256, destination) == expected_sha
+                or await asyncio.to_thread(
+                    file_sha256,
+                    destination,
+                    self._hash_progress(name, expected_size),
+                )
+                == expected_sha
             )
+            verify_seconds = time.monotonic() - verify_started
             if size_matches and hash_matches:
                 completed = destination.stat().st_size
                 fraction = (index + 1) / max(file_count, 1)
@@ -1410,6 +1490,15 @@ class JobController:
                     downloaded_bytes=completed_bytes + completed,
                     percent=fraction * download_ceiling,
                     message=f"{name} already exists — skipped.",
+                )
+                self._log_file_timing(
+                    name,
+                    source_url,
+                    [
+                        "already present",
+                        transfer_phrase("verified", completed, verify_seconds),
+                    ],
+                    time.monotonic() - file_started,
                 )
                 return completed
 
@@ -1429,7 +1518,10 @@ class JobController:
                 file_total_bytes=expected_size,
                 bytes_per_second=0,
             )
+            link_started = time.monotonic()
             if await asyncio.to_thread(link_or_copy, twin, partial):
+                link_seconds = time.monotonic() - link_started
+                verify_started = time.monotonic()
                 try:
                     completed = await self._verify_and_place(
                         partial, destination, expected_size, expected_sha, name
@@ -1460,6 +1552,19 @@ class JobController:
                         bytes_per_second=0,
                         message=f"{name} linked from {twin.parent.name} — not downloaded again.",
                     )
+                    self._log_file_timing(
+                        name,
+                        source_url,
+                        [
+                            f"linked from {twin.parent.name} in {link_seconds:.1f}s",
+                            transfer_phrase(
+                                "verified",
+                                completed,
+                                time.monotonic() - verify_started,
+                            ),
+                        ],
+                        time.monotonic() - file_started,
+                    )
                     return completed
             else:
                 print(
@@ -1483,6 +1588,11 @@ class JobController:
             and ARIA2C_PATH is not None
         )
 
+        # Bound in one branch each, read by the shared epilogue below.
+        verified_externally = False
+        inline_digest: str | None = None
+        fetch_phrase = ""
+
         if use_aria2:
             self.check_cancelled()
             control = partial.with_name(partial.name + ".aria2")
@@ -1502,7 +1612,8 @@ class JobController:
                 file_downloaded_bytes=start_size,
                 file_total_bytes=expected_size,
             )
-            await self._download_with_aria2c(
+            fetch_started = time.monotonic()
+            verified_externally = await self._download_with_aria2c(
                 url,
                 partial,
                 name,
@@ -1513,11 +1624,25 @@ class JobController:
                 download_ceiling,
                 expected_size,
                 start_size,
+                expected_sha,
+            )
+            fetch_seconds = time.monotonic() - fetch_started
+            # Same units as start_size, so a resumed file reports only the new bytes.
+            fetch_phrase = transfer_phrase(
+                "aria2c", max(0, written_bytes(partial) - start_size), fetch_seconds
             )
         else:
+            control = partial.with_name(partial.name + ".aria2")
+            if control.exists():
+                # This .part belongs to aria2c, and with --file-allocation=none its
+                # st_size is the full file length while most of it is holes. Resuming
+                # from it would send a Range past the real data and hash a file that is
+                # mostly zeroes, so it goes and this path starts clean.
+                partial.unlink(missing_ok=True)
+                control.unlink(missing_ok=True)
             # Deliberately st_size, not written_bytes(): this is a byte offset for a
-            # Range header, and blocks are not an offset. httpx writes sequentially, so
-            # extent and bytes written are the same number here anyway.
+            # Range header, and blocks are not an offset. The guard above is what makes
+            # extent and bytes written the same number here.
             partial_size = partial.stat().st_size if partial.exists() else 0
             if partial_size:
                 headers["Range"] = f"bytes={partial_size}-"
@@ -1550,6 +1675,16 @@ class JobController:
                         partial_size = 0
                         request_started_at = 0
 
+                    # Hash as the bytes stream past rather than reading the finished
+                    # file back. Seeded only here, never before the request: a server
+                    # that ignores Range answers 200 and the write below truncates, so
+                    # seeding earlier would digest bytes that never reach the file.
+                    hasher = hashlib.sha256() if expected_sha else None
+                    if hasher is not None and resumed:
+                        await asyncio.to_thread(
+                            seed_hash_from_partial, hasher, partial, partial_size
+                        )
+
                     response_length = int(response.headers.get("content-length", "0") or 0)
                     file_total = expected_size or (partial_size + response_length)
                     current = partial_size
@@ -1558,6 +1693,8 @@ class JobController:
                         async for chunk in response.aiter_bytes(1024 * 1024):
                             self.check_cancelled()
                             handle.write(chunk)
+                            if hasher is not None:
+                                hasher.update(chunk)
                             current += len(chunk)
                             elapsed = max(time.monotonic() - started, 0.01)
                             speed = (current - request_started_at) / elapsed
@@ -1579,9 +1716,38 @@ class JobController:
                     f"Network error while downloading {name} ({type(exc).__name__})."
                 ) from None
 
-        return await self._verify_and_place(
-            partial, destination, expected_size, expected_sha, name
+            inline_digest = hasher.hexdigest() if hasher is not None else None
+            fetch_seconds = time.monotonic() - started
+            fetch_phrase = transfer_phrase(
+                "downloaded",
+                max(0, current - request_started_at),
+                fetch_seconds,
+                note="hashed inline" if inline_digest is not None else "",
+            )
+
+        verify_started = time.monotonic()
+        completed = await self._verify_and_place(
+            partial,
+            destination,
+            expected_size,
+            expected_sha,
+            name,
+            digest=None if use_aria2 else inline_digest,
+            verified_externally=verified_externally,
         )
+        verify_seconds = time.monotonic() - verify_started
+
+        phases = [fetch_phrase]
+        if verified_externally:
+            phases.append("verified inline by aria2c")
+        elif expected_sha and inline_digest is None:
+            # aria2c refused --checksum, so this fell back to a second pass. That is
+            # the case the timing split is here to make visible.
+            phases.append(transfer_phrase("verified", completed, verify_seconds))
+        self._log_file_timing(
+            name, source_url, phases, time.monotonic() - file_started
+        )
+        return completed
 
     def _existing_twin(
         self,
@@ -1610,6 +1776,51 @@ class JobController:
                 continue
         return None
 
+    def _log_file_timing(
+        self,
+        name: str,
+        url: str,
+        phases: list[str],
+        total_seconds: float,
+    ) -> None:
+        """One permanent line per file: where it came from, and where the time went.
+
+        Every performance question about this launcher so far has been answered by
+        guessing from file mtimes, twice wrongly. The host is the raw hostname rather
+        than a hand-written "r2"/"huggingface" label, so a silent fallback shows up as
+        the hostname changing.
+        """
+        host = (urlsplit(url).hostname or "unknown").lower()
+        print(
+            f"10sorLabs launcher: {name} [{host}]: "
+            + ", ".join(phase for phase in phases if phase)
+            + f", total {total_seconds:.1f}s",
+            flush=True,
+        )
+
+    def _hash_progress(self, name: str, total: int) -> Any:
+        """A file_sha256 callback that keeps the panel moving during a long hash.
+
+        Called from an asyncio.to_thread worker. update() is plain setattr plus a
+        timestamp with no lock, so the worst a concurrent status poll can see is a
+        snapshot mixing two ticks - fine for a progress display.
+        """
+        last = 0.0
+
+        def report(done: int) -> None:
+            nonlocal last
+            now = time.monotonic()
+            if now - last < 0.25:
+                return
+            last = now
+            percent = (done / total * 100) if total else 0
+            self.update(
+                message=f"Verifying {name}… {percent:.0f}%",
+                bytes_per_second=0,
+            )
+
+        return report
+
     async def _verify_and_place(
         self,
         partial: Path,
@@ -1617,18 +1828,28 @@ class JobController:
         expected_size: int,
         expected_sha: str,
         name: str,
+        digest: str | None = None,
+        verified_externally: bool = False,
     ) -> int:
-        """Size, checksum, move. Shared by the download and link paths alike."""
+        """Size, checksum, move. Shared by the download and link paths alike.
+
+        The checksum can arrive three ways: already confirmed by aria2c as it wrote,
+        supplied as a digest computed from the bytes as they streamed past, or - for a
+        file that was written earlier and has settled - read back and hashed here.
+        """
         # Deliberately st_size, not written_bytes(): a finished file's extent is exactly
         # its size, while blocks are rounded up and would fail this on every file.
         if expected_size and partial.stat().st_size != expected_size:
             raise RuntimeError(
                 f"{name} has the wrong size after download; it was left as a .part file."
             )
-        if expected_sha:
-            self.update(message=f"Verifying {name}…", bytes_per_second=0)
-            actual_sha = await asyncio.to_thread(file_sha256, partial)
-            if actual_sha != expected_sha:
+        if expected_sha and not verified_externally:
+            if digest is None:
+                self.update(message=f"Verifying {name}…", bytes_per_second=0)
+                digest = await asyncio.to_thread(
+                    file_sha256, partial, self._hash_progress(name, expected_size)
+                )
+            if digest != expected_sha:
                 raise RuntimeError(
                     f"Checksum verification failed for {name}; the .part file was retained."
                 )
@@ -1648,14 +1869,21 @@ class JobController:
         download_ceiling: float,
         expected_size: int,
         start_size: int,
-    ) -> None:
-        """Fetch one file on sixteen connections, then hand it back for verification.
+        expected_sha: str = "",
+    ) -> bool:
+        """Fetch one file on sixteen connections. True when aria2c verified it itself.
 
-        aria2c's own output is never parsed and its checksum support is never used:
-        progress comes from the .part file's size, and the caller verifies the result
-        exactly as it does for a single stream.
+        aria2c's own output is still never parsed for progress - that comes from the
+        .part file's size. Its checksum support, however, is now used deliberately.
+        Reading a just-written file back to hash it measured at 60-80 MB/s on a pod
+        against 1.7 GB/s for a settled one, which made verification about 80% of a
+        19.7 GB install. Handing the digest to aria2c trades Python's SHA-256 for a
+        mature, widely deployed downloader's and removes the second pass over the data.
         """
+        global ARIA2C_SUPPORTS_CHECKSUM
+
         started = time.monotonic()
+        use_checksum = bool(expected_sha) and ARIA2C_SUPPORTS_CHECKSUM
 
         async def poll_progress() -> None:
             highest = start_size
@@ -1714,6 +1942,8 @@ class JobController:
             "--auto-file-renaming=false",
             "--summary-interval=0",
             "--console-log-level=warn",
+            # Verified as the bytes are written, so the file is never read back.
+            *(["--checksum=sha-256=" + expected_sha] if use_checksum else []),
             "-d",
             str(partial.parent),
             "-o",
@@ -1744,7 +1974,48 @@ class JobController:
 
             output, _ = waiter.result()
             if process.returncode:
-                tail = output.decode(errors="replace")[-500:] if output else ""
+                text = output.decode(errors="replace") if output else ""
+                tail = text[-500:]
+
+                if use_checksum and rejects_checksum_option(text):
+                    # This build will not take --checksum. Failing here would break
+                    # every file on every pod, so drop the flag for the rest of the
+                    # process and fall back to hashing after the download.
+                    ARIA2C_SUPPORTS_CHECKSUM = False
+                    print(
+                        "10sorLabs launcher: this aria2c does not support --checksum; "
+                        "falling back to verifying with a second pass.",
+                        flush=True,
+                    )
+                    return await self._download_with_aria2c(
+                        url,
+                        partial,
+                        name,
+                        index,
+                        file_count,
+                        completed_bytes,
+                        known_total,
+                        download_ceiling,
+                        expected_size,
+                        start_size,
+                        # The flag is already false, so this cannot recurse again.
+                        expected_sha="",
+                    )
+
+                if process.returncode == 32:
+                    # 32 is aria2c's "checksum validation failed": these bytes are known
+                    # bad, so neither aria2c nor the httpx branch may resume from them.
+                    # Every other non-zero exit - a dropped connection, a timeout, a 5xx,
+                    # a retry limit - leaves a legitimately partial file that
+                    # --continue=true exists to resume, and deleting that would make a
+                    # blip cost a full re-download.
+                    partial.unlink(missing_ok=True)
+                    partial.with_name(partial.name + ".aria2").unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Checksum verification failed for {name}; "
+                        f"the partial download was discarded."
+                    )
+
                 raise RuntimeError(
                     f"aria2c failed for {name} (exit {process.returncode}). {tail}".strip()
                 )
@@ -1755,6 +2026,8 @@ class JobController:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(poller, canceller, waiter, return_exceptions=True)
+
+        return use_checksum
 
     async def _run_process(self, *command: str | Path) -> tuple[int, str]:
         process = await asyncio.create_subprocess_exec(
