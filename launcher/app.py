@@ -1815,6 +1815,7 @@ class JobController:
             last = now
             percent = (done / total * 100) if total else 0
             self.update(
+                stage="verifying",
                 message=f"Verifying {name}… {percent:.0f}%",
                 bytes_per_second=0,
             )
@@ -1845,7 +1846,12 @@ class JobController:
             )
         if expected_sha and not verified_externally:
             if digest is None:
-                self.update(message=f"Verifying {name}…", bytes_per_second=0)
+                # The panel styles this stage distinctly; it is not a download.
+                self.update(
+                    stage="verifying",
+                    message=f"Verifying {name}…",
+                    bytes_per_second=0,
+                )
                 digest = await asyncio.to_thread(
                     file_sha256, partial, self._hash_progress(name, expected_size)
                 )

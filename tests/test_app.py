@@ -5,9 +5,11 @@ import importlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -2684,6 +2686,295 @@ def test_a_dead_status_endpoint_is_only_called_once_per_ttl(monkeypatch) -> None
     assert launcher_remote.fetch_status() == {"reason": "unavailable", "data": None}
 
     assert len(attempts) == 1
+
+
+STATIC = None  # resolved lazily against launcher_app.SOURCE_ROOT
+
+
+def static_file(name: str) -> str:
+    return (launcher_app.SOURCE_ROOT / "launcher" / "static" / name).read_text(
+        encoding="utf-8"
+    )
+
+
+class MarkupIndex(HTMLParser):
+    """Collects ids, and the classes of every element inside #job-panel."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ids: set[str] = set()
+        self.classes_in_job_panel: set[str] = set()
+        self._depth_in_panel = 0
+
+    def handle_starttag(self, tag, attrs) -> None:
+        attributes = dict(attrs)
+        element_id = attributes.get("id")
+        if element_id:
+            self.ids.add(element_id)
+        if self._depth_in_panel:
+            self.classes_in_job_panel.update((attributes.get("class") or "").split())
+            self._depth_in_panel += 1
+        elif element_id == "job-panel":
+            self._depth_in_panel = 1
+
+    def handle_endtag(self, tag) -> None:
+        if self._depth_in_panel:
+            self._depth_in_panel -= 1
+
+
+def test_every_element_app_js_reaches_for_exists_in_the_markup() -> None:
+    """The contract between app.js and index.html, enforced rather than remembered.
+
+    app.js finds elements by id and toggles classes on them, so a rename that looks
+    cosmetic breaks the panel silently - and pollStatus swallows the exception, so the
+    panel just freezes with a clean console. This makes that class of bug impossible.
+    """
+    js = static_file("app.js")
+    markup = MarkupIndex()
+    markup.feed(static_file("index.html"))
+
+    # Only the two forms that really are id lookups. A bare "#" scan would
+    # false-positive on location.hash and on the `#${selected}` template.
+    referenced = set(re.findall(r'querySelector\(\s*["\']#([A-Za-z0-9_-]+)', js))
+    referenced |= set(re.findall(r'getElementById\(\s*["\']([A-Za-z0-9_-]+)', js))
+
+    missing = sorted(referenced - markup.ids)
+    assert not missing, f"app.js reads ids that index.html does not define: {missing}"
+    assert len(referenced) >= 35
+
+    # The one selector that is not an id, and that the check above cannot see:
+    #   elements.track = document.querySelector("#job-panel .progress-track")
+    # used unguarded on every updatePanel.
+    assert 'querySelector("#job-panel .progress-track")' in js
+    assert "progress-track" in markup.classes_in_job_panel
+
+
+def test_every_view_target_has_a_view_and_appears_in_view_names() -> None:
+    js = static_file("app.js")
+    html = static_file("index.html")
+
+    targets = set(re.findall(r'data-view-target="([^"]+)"', html))
+    views = set(re.findall(r'data-view="([^"]+)"', html))
+    declared = set(
+        re.findall(
+            r'"([^"]+)"',
+            re.search(r"const VIEW_NAMES\s*=\s*\[([^\]]*)\]", js).group(1),
+        )
+    )
+
+    # A nav button with no matching view is the dead-tab bug this project has had.
+    assert targets == views == declared
+    # The RapidCache tab is a label change only; the view id stays "account".
+    assert "account" in declared
+    assert 'data-view-target="account"' in html
+    assert ">\n            RapidCache\n          </button>" in html
+
+
+UPSELL_HARNESS = r"""
+const fs = require("fs");
+const vm = require("vm");
+// argv: [node, this script, app.js path, scenarios json]
+const APP_JS = process.argv[2];
+const scenarios = JSON.parse(process.argv[3]);
+
+function fakeElement() {
+  const node = {
+    textContent: "", innerHTML: "", hidden: false, disabled: false,
+    href: "", value: "", src: "", muted: false,
+    style: {}, dataset: {},
+    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    addEventListener(type, handler) { (node.handlers[type] ||= []).push(handler); },
+    setAttribute() {}, removeAttribute() {},
+    append() {}, remove() {}, focus() {}, scrollIntoView() {},
+    play() { node.played = true; return Promise.resolve(); },
+    querySelector() { return fakeElement(); },
+    querySelectorAll() { return []; },
+    handlers: {}, played: false,
+  };
+  return node;
+}
+
+const results = [];
+for (const scenario of scenarios) {
+  const nodes = {};
+  const timers = { started: [], cleared: [] };
+  const element = (key) => (nodes[key] ||= fakeElement());
+
+  const document = {
+    // app.js spreads the result and reads .dataset on each entry.
+    querySelectorAll: (sel) => {
+      const one = fakeElement();
+      one.dataset.view = "workflows";
+      one.dataset.viewTarget = "workflows";
+      return [one];
+    },
+    querySelector: (sel) => element(sel),
+    getElementById: (id) => element("#" + id),
+    createElement: () => fakeElement(),
+    addEventListener() {},
+  };
+
+  const sandbox = {
+    document,
+    console,
+    Promise,
+    setTimeout,
+    clearTimeout,
+    fetch: () => Promise.reject(new Error("offline in tests")),
+    // Recorded, never scheduled: a live interval keeps node alive and would hang
+    // the pytest wrapper instead of failing it.
+    setInterval: (fn, ms) => { const id = timers.started.length + 1; timers.started.push(id); return id; },
+    clearInterval: (id) => { timers.cleared.push(id); },
+  };
+  sandbox.window = {
+    location: { hash: scenario.hash || "", protocol: "https:", hostname: "pod.test" },
+    history: { replaceState() {} },
+    matchMedia: (q) => ({ matches: Boolean(scenario.reduceMotion) }),
+    setInterval: sandbox.setInterval,
+    clearInterval: sandbox.clearInterval,
+  };
+  sandbox.globalThis = sandbox;
+
+  const context = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(APP_JS, "utf8"), context);
+
+  const video = nodes["#rapidcache-video"];
+  if (scenario.videoError && video && video.handlers.error) {
+    video.handlers.error.forEach((h) => h());
+  }
+  if (scenario.account) {
+    context.renderAccount(scenario.account);
+  }
+
+  results.push({
+    name: scenario.name,
+    upsellHidden: nodes["#rapidcache-upsell"].hidden,
+    hintHidden: nodes["#rapidcache-signin-hint"].hidden,
+    videoHidden: video ? video.hidden : null,
+    videoSrc: video ? video.src : null,
+    liveTimers: timers.started.filter((id) => !timers.cleared.includes(id)).length,
+  });
+}
+console.log(JSON.stringify(results));
+"""
+
+
+def run_upsell_harness(scenarios: list, app_js: Path) -> dict:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available; the upsell harness needs it")
+    harness = app_js.parent / "_upsell_harness.cjs"
+    harness.write_text(UPSELL_HARNESS, encoding="utf-8")
+    try:
+        finished = subprocess.run(
+            [node, str(harness), str(app_js), json.dumps(scenarios)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        harness.unlink(missing_ok=True)
+    assert finished.returncode == 0, finished.stderr
+    return {row["name"]: row for row in json.loads(finished.stdout)}
+
+
+def account(configured: bool, service: str, tier: str, source: str = "file") -> dict:
+    return {
+        "configured": configured,
+        "source": source,
+        "service": service,
+        "status": {"tier": tier} if tier else {},
+    }
+
+
+def test_the_upsell_never_reaches_someone_who_cannot_or_need_not_buy(tmp_path) -> None:
+    """The eight states of the account panel, one row each.
+
+    Getting this wrong in either direction is costly: advertise to a subscriber and we
+    insult a paying customer, hide from a signed-out pod and the promo reaches nobody.
+    """
+    app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+    rows = run_upsell_harness(
+        [
+            # A 1.x pod: no LCT_API_BASE, so there is no way to sign in here at all.
+            {"name": "no_account_service_no_upsell",
+             "account": account(False, "unconfigured", "")},
+            # A 2.0 pod with the base baked in and nobody signed in - the audience.
+            {"name": "signed_out_2_0_image",
+             "account": account(False, "unauthenticated", "")},
+            {"name": "signed_in_standard",
+             "account": account(True, "ok", "standard")},
+            {"name": "credential_rejected",
+             "account": account(True, "unauthenticated", "")},
+            {"name": "template_key_standard",
+             "account": account(True, "ok", "standard", source="env")},
+            {"name": "signed_in_paying",
+             "account": account(True, "ok", "fast")},
+            {"name": "status_check_failed",
+             "account": account(True, "unavailable", "")},
+            {"name": "template_key_paying",
+             "account": account(True, "ok", "fast", source="env")},
+        ],
+        app_js,
+    )
+
+    assert rows["no_account_service_no_upsell"]["upsellHidden"] is True
+    assert rows["signed_out_2_0_image"]["upsellHidden"] is False
+    assert rows["signed_in_standard"]["upsellHidden"] is False
+    assert rows["credential_rejected"]["upsellHidden"] is False
+    assert rows["template_key_standard"]["upsellHidden"] is False
+    assert rows["signed_in_paying"]["upsellHidden"] is True
+    assert rows["status_check_failed"]["upsellHidden"] is True
+    assert rows["template_key_paying"]["upsellHidden"] is True
+
+    # A template-key pod hides the sign-in form, so the closing line must not point at it.
+    assert rows["template_key_standard"]["hintHidden"] is True
+    assert rows["signed_in_standard"]["hintHidden"] is False
+
+    # A live interval would keep node running and hang the wrapper rather than fail it.
+    for row in rows.values():
+        assert row["liveTimers"] == 0
+
+
+def test_a_failed_video_hides_only_the_video(tmp_path) -> None:
+    app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+    rows = run_upsell_harness(
+        [
+            {"name": "video_ok",
+             "account": account(True, "ok", "standard")},
+            {"name": "video_404",
+             "videoError": True,
+             "account": account(True, "ok", "standard")},
+        ],
+        app_js,
+    )
+
+    assert rows["video_ok"]["videoHidden"] is False
+    assert rows["video_ok"]["videoSrc"] == "/rapidcache-demo.mp4"
+    # A 404 or decode failure hides the video and leaves the promo standing.
+    assert rows["video_404"]["videoHidden"] is True
+    assert rows["video_404"]["upsellHidden"] is False
+
+
+def test_an_empty_demo_url_hides_the_video_and_keeps_the_promo(tmp_path) -> None:
+    source = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+    patched = tmp_path / "app.js"
+    patched.write_text(
+        source.read_text(encoding="utf-8").replace(
+            'const RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4";',
+            'const RAPIDCACHE_DEMO_URL = "";',
+        ),
+        encoding="utf-8",
+    )
+    assert 'RAPIDCACHE_DEMO_URL = ""' in patched.read_text(encoding="utf-8")
+
+    rows = run_upsell_harness(
+        [{"name": "no_url", "account": account(True, "ok", "standard")}], patched
+    )
+
+    assert rows["no_url"]["videoHidden"] is True
+    assert rows["no_url"]["videoSrc"] == ""
+    assert rows["no_url"]["upsellHidden"] is False
 
 
 def test_custom_node_ref_must_be_a_pinned_commit(tmp_path, monkeypatch) -> None:

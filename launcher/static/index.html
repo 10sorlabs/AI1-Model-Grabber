@@ -32,8 +32,10 @@
           <button class="sidebar-link" type="button" data-view-target="custom-nodes">
             Custom nodes
           </button>
+          <!-- Label only. The view id stays "account": VIEW_NAMES, data-view and every
+               account-* id in app.js key off it. -->
           <button class="sidebar-link" type="button" data-view-target="account">
-            Account
+            RapidCache
           </button>
         </nav>
       </aside>
@@ -208,6 +210,38 @@
             <button id="account-signout" class="button button-ghost" type="button" hidden>
               SIGN OUT
             </button>
+          </section>
+
+          <!-- Hidden by default so it cannot flash before /api/account resolves, and so
+               a failed request leaves it hidden. app.js decides; see renderAccount. -->
+          <section id="rapidcache-upsell" class="model-section promo" hidden>
+            <h2 class="promo-headline">Downloads up to 20&times; faster</h2>
+            <p class="promo-lede">
+              Models stream from the RapidCache network instead of HuggingFace. A 63 GB
+              workflow lands in under three minutes instead of forty.
+            </p>
+            <video
+              id="rapidcache-video"
+              class="promo-video"
+              muted
+              loop
+              playsinline
+              preload="metadata"
+              aria-hidden="true"
+              hidden
+            ></video>
+            <a
+              id="rapidcache-cta"
+              class="button button-primary promo-cta"
+              href="https://buy.stripe.com/dRm6oHa927NucKs3OqeEo02"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Get RapidCache — €14/month
+            </a>
+            <p id="rapidcache-signin-hint" class="promo-hint">
+              Already subscribed? Sign in above.
+            </p>
           </section>
         </section>
       </main>

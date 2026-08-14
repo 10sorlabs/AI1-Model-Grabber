@@ -1,3 +1,8 @@
+// Where the RapidCache demo clip is served from. Accepts a local path or a full URL,
+// so the file can move to a CDN without touching anything else. Empty disables the
+// video and leaves the rest of the promo intact.
+const RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4";
+
 const elements = {
   navLinks: [...document.querySelectorAll("[data-view-target]")],
   views: [...document.querySelectorAll("[data-view]")],
@@ -37,13 +42,22 @@ const elements = {
   accountSummary: document.querySelector("#account-summary"),
   accountSignin: document.querySelector("#account-signin"),
   accountSignout: document.querySelector("#account-signout"),
+  rapidcacheUpsell: document.querySelector("#rapidcache-upsell"),
+  rapidcacheVideo: document.querySelector("#rapidcache-video"),
+  rapidcacheSigninHint: document.querySelector("#rapidcache-signin-hint"),
 };
+
+// No CSS rule can stop a video from autoplaying; that has to be decided here.
+const reduceMotion =
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // One list, used by both selectView and initialise. Keeping two copies is what let
 // a new view silently fall through to Workflows.
 const VIEW_NAMES = ["workflows", "custom-models", "custom-nodes", "account"];
 
 const runningStates = new Set(["running"]);
+let selectedView = "workflows";
 let workflows = [];
 let activeWorkflowId = null;
 let pollTimer = null;
@@ -87,6 +101,7 @@ function comfyUrl(serverUrl) {
 function selectView(viewName, updateHash = true) {
   const allowedViews = new Set(VIEW_NAMES);
   const selected = allowedViews.has(viewName) ? viewName : "workflows";
+  selectedView = selected;
   elements.views.forEach((view) => {
     view.hidden = view.dataset.view !== selected;
   });
@@ -96,6 +111,8 @@ function selectView(viewName, updateHash = true) {
   if (updateHash) {
     window.history.replaceState(null, "", `#${selected}`);
   }
+  // The video lives in a subtree that was display:none until now.
+  if (selected === "account") playRapidcacheVideo();
 }
 
 function renderWorkflows(isBusy = false) {
@@ -171,10 +188,13 @@ async function startWorkflow(workflowId) {
 function showImmediateError(message) {
   elements.panel.hidden = false;
   elements.panel.className = "job-panel is-error";
+  elements.panel.dataset.stage = "error";
   elements.kicker.textContent = "ERROR";
   elements.title.textContent = "Could not start workflow";
   elements.percent.textContent = "0%";
   elements.fill.style.width = "0%";
+  // Without this a failed start keeps the previous run's byte count and rate.
+  elements.metrics.innerHTML = "";
   elements.warnings.textContent = "";
   elements.warnings.hidden = true;
   elements.error.textContent = message;
@@ -192,6 +212,9 @@ function updatePanel(status) {
 
   elements.panel.hidden = status.status === "idle";
   elements.panel.className = `job-panel${isComplete ? " is-complete" : ""}${isError ? " is-error" : ""}`;
+  // Always set, never conditionally: a stale stage would keep its colour after the
+  // panel moved on. className is reassigned above, so this has to be an attribute.
+  elements.panel.dataset.stage = String(status.stage || status.status || "idle");
   elements.kicker.textContent = String(status.stage || status.status).toUpperCase();
   elements.title.textContent = status.title || "Workflow setup";
   elements.percent.textContent = `${Math.round(percent)}%`;
@@ -199,19 +222,33 @@ function updatePanel(status) {
   elements.track.setAttribute("aria-valuenow", String(Math.round(percent)));
   elements.message.textContent = status.message || "";
 
+  // Separate spans so bytes, rate and the file counter can carry different weights
+  // rather than reading as one flat run of text.
   const metrics = [];
   if (status.file_downloaded_bytes > 0 || status.file_total_bytes > 0) {
     const downloaded = formatBytes(status.file_downloaded_bytes);
     const total = formatBytes(status.file_total_bytes);
-    metrics.push(total ? `${downloaded} / ${total}` : downloaded);
+    metrics.push(
+      `<span class="metric-bytes">${escapeText(
+        total ? `${downloaded} / ${total}` : downloaded,
+      )}</span>`,
+    );
   }
   if (status.bytes_per_second > 0) {
-    metrics.push(`${formatBytes(status.bytes_per_second)}/s`);
+    metrics.push(
+      `<span class="metric-rate">${escapeText(
+        `${formatBytes(status.bytes_per_second)}/s`,
+      )}</span>`,
+    );
   }
   if (status.file_count > 1 && status.file_index > 0) {
-    metrics.push(`File ${status.file_index} of ${status.file_count}`);
+    metrics.push(
+      `<span class="metric-files">${escapeText(
+        `File ${status.file_index} of ${status.file_count}`,
+      )}</span>`,
+    );
   }
-  elements.metrics.textContent = metrics.filter(Boolean).join(" · ");
+  elements.metrics.innerHTML = metrics.join("");
 
   const warnings = Array.isArray(status.warnings) ? status.warnings : [];
   elements.warnings.innerHTML = warnings.length
@@ -666,6 +703,45 @@ function formatRenewal(value) {
   });
 }
 
+// Deliberately declared above the account renderer: a test slices this file between
+// that function and the loader below it and asserts on what falls inside, so nothing
+// new may sit between the two. Do not quote either name literally here - the slice is
+// found by string search and would land in this comment.
+function setUpRapidcacheVideo() {
+  const video = elements.rapidcacheVideo;
+  if (!video) return;
+  if (!RAPIDCACHE_DEMO_URL) {
+    // No clip configured. Hide the element rather than render an empty box.
+    video.hidden = true;
+    return;
+  }
+  // A 404 or a decode failure hides the video and leaves the promo intact. The
+  // listener goes on the element itself: src on a <source> child fires an error
+  // that does not bubble, so it would never arrive here.
+  video.addEventListener(
+    "error",
+    () => {
+      video.hidden = true;
+    },
+    { once: true },
+  );
+  // Some browsers check the property, not just the attribute, before allowing
+  // autoplay.
+  video.muted = true;
+  video.src = RAPIDCACHE_DEMO_URL;
+  video.hidden = false;
+}
+
+function playRapidcacheVideo() {
+  const video = elements.rapidcacheVideo;
+  if (!video || video.hidden || reduceMotion) return;
+  // Browsers do not reliably start a video inside a display:none subtree, so this is
+  // attempted both when the view is shown and after the panel is unhidden. A rejected
+  // play promise is an unhandled rejection unless it is caught.
+  const started = video.play();
+  if (started && typeof started.catch === "function") started.catch(() => {});
+}
+
 function renderAccount(account) {
   const status = account.status || {};
   const source = account.source || "none";
@@ -689,6 +765,26 @@ function renderAccount(account) {
       : "Standard downloads"
     : "Checking subscription…";
   elements.tierBadge.hidden = !account.configured || !(showChecking || showTier);
+
+  // Never advertise a product on a pod that has no way to redeem it, never advertise
+  // to someone who already pays, and never advertise when we cannot rule that out.
+  // Showing a subscriber an advert for what they already bought is worse than showing
+  // nobody anything.
+  //   unconfigured -> no account service at all, so signing in is impossible here
+  //   fast         -> they already have it
+  //   unavailable  -> the status check failed; they may well be paying
+  // This sits before the four early returns below, not after them: three of the four
+  // states never reach the end of this function.
+  elements.rapidcacheUpsell.hidden =
+    service === "unconfigured" ||
+    (showTier && tier === "fast") ||
+    (account.configured && service === "unavailable");
+  if (!elements.rapidcacheUpsell.hidden) {
+    // The template-key branch hides the sign-in form, so pointing at it would be
+    // pointing at nothing.
+    elements.rapidcacheSigninHint.hidden = fromTemplate;
+    if (selectedView === "account") playRapidcacheVideo();
+  }
 
   if (fromTemplate) {
     elements.accountState.textContent = "Licence key set on this pod's template";
@@ -809,6 +905,7 @@ elements.customNodeRestart.addEventListener("click", restartComfyUI);
 async function initialise() {
   const requestedView = window.location.hash.replace("#", "");
   const initialView = VIEW_NAMES.includes(requestedView) ? requestedView : "workflows";
+  setUpRapidcacheVideo();
   selectView(initialView, false);
   await loadCatalog();
   try {
