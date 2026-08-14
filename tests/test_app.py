@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from html.parser import HTMLParser
@@ -2863,17 +2864,19 @@ def run_upsell_harness(scenarios: list, app_js: Path) -> dict:
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not available; the upsell harness needs it")
-    harness = app_js.parent / "_upsell_harness.cjs"
-    harness.write_text(UPSELL_HARNESS, encoding="utf-8")
-    try:
+    # Its own temp directory, never next to app.js: launcher/static is served at "/" and
+    # ships to every pod, so a kill -9 between write and unlink would leave the harness
+    # inside the bootstrap zip. app.js is passed as an absolute path, so where the
+    # harness lives does not matter to it.
+    with tempfile.TemporaryDirectory() as workspace:
+        harness = Path(workspace) / "_upsell_harness.cjs"
+        harness.write_text(UPSELL_HARNESS, encoding="utf-8")
         finished = subprocess.run(
             [node, str(harness), str(app_js), json.dumps(scenarios)],
             capture_output=True,
             text=True,
             timeout=60,
         )
-    finally:
-        harness.unlink(missing_ok=True)
     assert finished.returncode == 0, finished.stderr
     return {row["name"]: row for row in json.loads(finished.stdout)}
 
@@ -2887,7 +2890,7 @@ def account(configured: bool, service: str, tier: str, source: str = "file") -> 
     }
 
 
-def test_the_upsell_never_reaches_someone_who_cannot_or_need_not_buy(tmp_path) -> None:
+def test_the_upsell_never_reaches_someone_who_cannot_or_need_not_buy() -> None:
     """The eight states of the account panel, one row each.
 
     Getting this wrong in either direction is costly: advertise to a subscriber and we
@@ -2936,7 +2939,7 @@ def test_the_upsell_never_reaches_someone_who_cannot_or_need_not_buy(tmp_path) -
         assert row["liveTimers"] == 0
 
 
-def test_a_failed_video_hides_only_the_video(tmp_path) -> None:
+def test_a_failed_video_hides_only_the_video() -> None:
     app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
     rows = run_upsell_harness(
         [
