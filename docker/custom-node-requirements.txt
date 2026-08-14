@@ -1,0 +1,108 @@
+# Python dependencies for the twelve custom-node repos in catalog/workflows.json.
+#
+# Derived, not recalled: every entry below was read from that repo's
+# requirements.txt fetched at the exact commit pinned in the catalog, never at HEAD.
+# Regenerate the same way if the catalog's pins move.
+#
+# This file is a cache warm and nothing more. The launcher still installs each node
+# pack's own requirements on the pod at runtime, exactly as it does today, so a
+# package missing here costs seconds of pip time and changes no behaviour.
+#
+# Installed under -c /tmp/constraints.txt, which pins the base image's torch,
+# torchvision, torchaudio, numpy, transformers, pillow and opencv-* so that the
+# unpinned `torch` and `numpy` lines below cannot downgrade the CUDA build that
+# ComfyUI needs to start. Dockerfile verifies torch is intact immediately after.
+#
+# Deliberately absent:
+#   dlib: sdist only (dlib-20.0.1.tar.gz); compiles from source
+#   opencv-contrib-python: resolves to 5.0.0.93, a major version above the
+#     4.13.0.92 opencv-python and opencv-python-headless already in the base image;
+#     a third cv2 provider on top of those two is the classic broken-cv2 setup
+#   sam2: git+https URL at unpinned HEAD; not reproducible in an image build
+#   ComfyUI_Comfyroll_CustomNodes and rgthree-comfy declare no dependencies at their
+#   pinned refs (no requirements.txt, and an empty one, respectively).
+
+# ComfyUI-Easy-Use, ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack, ComfyUI-KJNodes
+opencv-python-headless
+
+# ComfyUI-Easy-Use, ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack, ComfyUI-KJNodes, ComfyUI_LayerStyle, RES4LYF, seedvr2_videoupscaler
+matplotlib
+
+# ComfyUI-Easy-Use, ComfyUI_FaceAnalysis
+onnxruntime
+
+# ComfyUI-Easy-Use, seedvr2_videoupscaler
+diffusers>=0.33.1
+peft>=0.17.0
+
+# ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack
+dill
+
+# ComfyUI-Impact-Pack, ComfyUI-Impact-Subpack, ComfyUI_LayerStyle, RES4LYF, seedvr2_videoupscaler
+numpy>=1.26.4
+
+# ComfyUI-Impact-Pack, ComfyUI_LayerStyle
+scikit-image
+scipy
+transformers>=4.43.2
+
+# ComfyUI-KJNodes, ComfyUI_FaceAnalysis
+color-matcher
+
+# ComfyUI-KJNodes, ComfyUI_LayerStyle
+pillow>=10.3.0
+
+# ComfyUI-VideoHelperSuite, RES4LYF, seedvr2_videoupscaler
+opencv-python
+
+# ComfyUI_LayerStyle, seedvr2_videoupscaler
+torch
+
+# ComfyUI-Easy-Use
+accelerate
+clip-interrogator>=0.6.0
+lark
+sentencepiece
+spandrel
+
+# ComfyUI-Impact-Pack
+piexif
+segment-anything
+
+# ComfyUI-Impact-Subpack
+ultralytics>=8.3.162
+
+# ComfyUI-KJNodes
+mss
+
+# ComfyUI-SAM3
+comfy-3d-viewers==0.2.44
+comfy-env==0.3.89
+
+# ComfyUI-VideoHelperSuite
+imageio-ffmpeg
+
+# ComfyUI_FaceAnalysis
+insightface
+
+# ComfyUI_LayerStyle
+blend-modes
+colour-science
+huggingface-hub>=0.23.4
+loguru
+pymatting
+scikit-learn
+timm
+
+# RES4LYF
+pywavelets
+
+# seedvr2_videoupscaler
+einops
+gguf
+omegaconf>=2.3.0
+psutil
+rotary-embedding-torch>=0.5.3
+safetensors
+torchvision
+tqdm
