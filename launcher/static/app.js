@@ -1,7 +1,14 @@
 // Where the RapidCache demo clip is served from. Accepts a local path or a full URL,
 // so the file can move to a CDN without touching anything else. Empty disables the
 // video and leaves the rest of the promo intact.
-const RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4";
+//
+// Empty on purpose. At the card's 420px width the clip renders 378x213 and takes 42% of
+// the card's height, and the two ComfyUI panels inside it are illegible at that size.
+// The stats row carries what the clip was carrying, and the CTA opens the product page
+// where it plays full size. Measured, the card is 279px tall without it - the size this
+// card was asked for. The <video>, its CSS and the whole degradation path are unchanged,
+// so putting the clip back is this one line.
+const RAPIDCACHE_DEMO_URL = "";
 
 const elements = {
   navLinks: [...document.querySelectorAll("[data-view-target]")],

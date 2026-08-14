@@ -49,6 +49,7 @@
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-pill: 999px;
 
   --shell-max: 1080px;
@@ -847,9 +848,18 @@ h1 {
 
 /* ------------------------------------------------------------ RapidCache --- */
 
+/* A card tucked under the sign-in panel, not a page section. It carries its own border
+   and radius rather than riding on .model-section, so it no longer inherits that
+   section's full-width shape. Every child below declares its own margin: the only reset
+   in this file is `h1, h2, p { margin-top: 0 }`, so anything that stays silent keeps a
+   UA margin-bottom and the card grows back. */
 .promo {
-  margin-top: var(--space-3);
-  border-color: var(--accent-line);
+  width: 100%;
+  max-width: 420px;
+  margin-top: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-xl);
   background: linear-gradient(180deg, rgba(82, 113, 255, 0.06), transparent 60%),
     #101219;
 }
@@ -866,20 +876,55 @@ h1 {
 }
 
 .promo-lede {
-  max-width: 56ch;
-  margin-bottom: var(--space-5);
+  margin: 0 0 var(--space-5);
   color: var(--muted);
-  font-size: var(--text-base);
-  line-height: 1.55;
+  font-size: var(--text-md);
+  line-height: 1.5;
 }
 
+/* Head to head. auto-fit collapses to one column on a narrow pod browser without a
+   media query of its own. */
+.promo-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.promo-stat-label {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.promo-stat-value {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+/* --accent-hover, not --accent. The card's own gradient tints the background these sit
+   on, and against that composite --accent falls to 4.34:1 - under AA, and it drifts with
+   however the lede wraps. --accent-hover clears AA everywhere in the gradient. */
+.promo-stat.is-accent .promo-stat-value {
+  color: var(--accent-hover);
+}
+
+/* aspect-ratio is load-bearing, not decoration: a <video> with no dimensions is 300x150
+   until metadata arrives, so the card would jump height on every visit. The ratio is read
+   out of the clip's tkhd box, 1280x720. The radius stays --radius: at --radius-xl an
+   element inset inside the card reads as more rounded than the card itself. */
 .promo-video {
   display: block;
   width: 100%;
-  max-width: 100%;
-  margin-bottom: var(--space-5);
+  margin: 0 0 var(--space-5);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  aspect-ratio: 16 / 9;
   background: var(--surface);
 }
 
@@ -887,8 +932,45 @@ h1 {
   display: none;
 }
 
+/* .button cannot be reused here: it imposes letter-spacing .04em, weight 700, a 38px
+   min-height and --radius-sm, and .button-primary adds min-width: 156px. All five fight
+   the pill. (.button is not text-transform: uppercase - the shouting elsewhere on this
+   page comes from the markup literals, not from here.)
+   display: flex, not inline-flex. An inline-level box in a block container generates a
+   line box, and the strut's descender leaves 3-5px of dead space under the pill that
+   shows up in no margin. Every other .button in this file sits in a flex or grid parent,
+   which suppresses it; this card is the first place it would be visible.
+   width: fit-content keeps the pill hugging its label. */
 .promo-cta {
-  min-width: 0;
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  padding: 12px var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: white;
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-decoration: none;
+  transition:
+    background-color 140ms ease,
+    transform 100ms ease;
+}
+
+.promo-cta:hover {
+  background: var(--accent-hover);
+}
+
+.promo-cta:active {
+  transform: translateY(1px);
+}
+
+.promo-fineprint {
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 .promo-hint {
@@ -966,8 +1048,11 @@ h1 {
     margin-bottom: var(--space-6);
   }
 
+  /* .promo is listed by hand: it dropped .model-section to become a card, and this rule
+     is the padding it would otherwise have lost at phone width. */
   .workflow-section,
-  .model-section {
+  .model-section,
+  .promo {
     padding: var(--space-4);
   }
 
@@ -1020,8 +1105,11 @@ h1 {
     animation-iteration-count: 1 !important;
   }
 
+  /* The universal transition-duration above does not reach these: a transform applied by
+     :active or :hover is a state change, not a transition, so each needs naming. */
   .workflow-card:hover:not(:disabled),
-  .button:active:not(:disabled) {
+  .button:active:not(:disabled),
+  .promo-cta:active {
     transform: none;
   }
 }

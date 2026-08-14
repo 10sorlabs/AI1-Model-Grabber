@@ -214,12 +214,24 @@
 
           <!-- Hidden by default so it cannot flash before /api/account resolves, and so
                a failed request leaves it hidden. app.js decides; see renderAccount. -->
-          <section id="rapidcache-upsell" class="model-section promo" hidden>
-            <h2 class="promo-headline">Downloads up to 20&times; faster</h2>
+          <section id="rapidcache-upsell" class="promo" hidden>
+            <h2 class="promo-headline">Stop paying to wait.</h2>
             <p class="promo-lede">
-              Models stream from the RapidCache network instead of HuggingFace. A 63 GB
-              workflow lands in under three minutes instead of forty.
+              Deploy to a fresh GPU pod up to 20&times; faster. Less setup, less idle
+              GPU time.
             </p>
+
+            <div class="promo-stats">
+              <div class="promo-stat">
+                <p class="promo-stat-label">Standard setup</p>
+                <p class="promo-stat-value">30-60 minutes</p>
+              </div>
+              <div class="promo-stat is-accent">
+                <p class="promo-stat-label">RapidCache</p>
+                <p class="promo-stat-value">Ready in minutes</p>
+              </div>
+            </div>
+
             <video
               id="rapidcache-video"
               class="promo-video"
@@ -232,13 +244,14 @@
             ></video>
             <a
               id="rapidcache-cta"
-              class="button button-primary promo-cta"
-              href="https://buy.stripe.com/dRm6oHa927NucKs3OqeEo02"
+              class="promo-cta"
+              href="https://10sorlabs.com/pages/rapidcache"
               target="_blank"
               rel="noopener noreferrer"
             >
-              Get RapidCache — €14/month
+              Get RapidCache &middot; &euro;14/month
             </a>
+            <p class="promo-fineprint">Built for RunPod &middot; Cancel anytime</p>
             <p id="rapidcache-signin-hint" class="promo-hint">
               Already subscribed? Sign in above.
             </p>

@@ -2939,8 +2939,29 @@ def test_the_upsell_never_reaches_someone_who_cannot_or_need_not_buy() -> None:
         assert row["liveTimers"] == 0
 
 
-def test_a_failed_video_hides_only_the_video() -> None:
-    app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+def test_a_failed_video_hides_only_the_video(tmp_path) -> None:
+    """The error path, run against a build that has a clip configured.
+
+    This is the test that patches now. The card ships with RAPIDCACHE_DEMO_URL empty, so
+    the 404 path has no way to run against the file as-is - it puts the clip back to prove
+    that a decode failure hides the video and leaves the promo standing. The two video
+    tests swap roles whenever that constant does; the other one runs the shipped file.
+    """
+    source = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+    patched = tmp_path / "app.js"
+    patched.write_text(
+        source.read_text(encoding="utf-8").replace(
+            'const RAPIDCACHE_DEMO_URL = "";',
+            'const RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4";',
+        ),
+        encoding="utf-8",
+    )
+    # Guards the postcondition rather than the substitution: however it got there, the
+    # file under test must have a clip configured or the scenarios below prove nothing.
+    assert 'RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4"' in patched.read_text(
+        encoding="utf-8"
+    )
+
     rows = run_upsell_harness(
         [
             {"name": "video_ok",
@@ -2949,7 +2970,7 @@ def test_a_failed_video_hides_only_the_video() -> None:
              "videoError": True,
              "account": account(True, "ok", "standard")},
         ],
-        app_js,
+        patched,
     )
 
     assert rows["video_ok"]["videoHidden"] is False
@@ -2959,20 +2980,18 @@ def test_a_failed_video_hides_only_the_video() -> None:
     assert rows["video_404"]["upsellHidden"] is False
 
 
-def test_an_empty_demo_url_hides_the_video_and_keeps_the_promo(tmp_path) -> None:
-    source = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
-    patched = tmp_path / "app.js"
-    patched.write_text(
-        source.read_text(encoding="utf-8").replace(
-            'const RAPIDCACHE_DEMO_URL = "/rapidcache-demo.mp4";',
-            'const RAPIDCACHE_DEMO_URL = "";',
-        ),
-        encoding="utf-8",
-    )
-    assert 'RAPIDCACHE_DEMO_URL = ""' in patched.read_text(encoding="utf-8")
+def test_an_empty_demo_url_hides_the_video_and_keeps_the_promo() -> None:
+    """Production behaviour, run against app.js exactly as it ships.
+
+    This used to patch the constant to "" to simulate the case. The card now ships that
+    way, so the real file is the case - and patching would be a silent no-op, because the
+    needle it used to look for no longer exists. Asserting on the shipped file is the
+    stronger test: it fails if anyone re-enables the clip without revisiting these two.
+    """
+    app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
 
     rows = run_upsell_harness(
-        [{"name": "no_url", "account": account(True, "ok", "standard")}], patched
+        [{"name": "no_url", "account": account(True, "ok", "standard")}], app_js
     )
 
     assert rows["no_url"]["videoHidden"] is True
