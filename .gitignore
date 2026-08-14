@@ -6,3 +6,6 @@
 __pycache__/
 *.py[cod]
 *.part
+
+*.mp4
+!launcher/static/rapidcache-demo.mp4
