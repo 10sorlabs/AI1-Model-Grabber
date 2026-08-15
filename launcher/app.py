@@ -498,6 +498,37 @@ def host_matches(hostname: str, allowed: tuple[str, ...]) -> bool:
     return any(hostname == host or hostname.endswith(f".{host}") for host in allowed)
 
 
+def should_verify_digest(file_spec: dict[str, Any], expected_size: int) -> bool:
+    """Whether this file's sha256 must be checked, over and above its length.
+
+    The RapidCache server mirrors some objects into a bucket it controls, hashes them on
+    the way in, and presigns the URL; for those it sends verify: false and we take its
+    word. Re-reading gigabytes back off MooseFS to confirm a digest it generated buys
+    nothing and costs minutes. Anywhere else the digest stands: it is there to catch a
+    mirror we do not control changing under us.
+
+    Only the literal False turns it off. Absent, null, or a string "false" out of a
+    hand-edited catalog all mean verify - the same `is` idiom as `parallel`, for the same
+    reason. An older server sends no field and we verify; an older launcher ignores the
+    field and verifies. Both directions fail toward verifying.
+
+    Note this is deliberately not inferred from `parallel`, even though the two currently
+    coincide: every mirrored entry gets both, and nothing else gets either. They mean
+    different things - `parallel` is "supports range requests", this is "we published it"
+    - and collapsing them would break quietly the first time a third-party host supports
+    ranges.
+
+    The length check and the digest are alternatives, and at least one of them always
+    runs. A spec that turns the digest off without a size_bytes to check against would
+    leave no integrity gate at all, so that combination keeps the digest. Do not delete
+    the size check in _verify_and_place on the assumption the digest covers it: when this
+    returns False, that check is the only gate there is.
+    """
+    if file_spec.get("verify") is False and expected_size > 0:
+        return False
+    return True
+
+
 def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
     url = str(file_spec.get("url", "")).strip()
     if not url.startswith(("https://", "http://")):
@@ -616,6 +647,49 @@ def written_bytes(path: Path) -> int:
         return 0
     blocks = getattr(stat, "st_blocks", None)
     return blocks * 512 if blocks is not None else stat.st_size
+
+
+class RateWindow:
+    """Throughput over a trailing window rather than since the transfer began.
+
+    A lifetime average freezes its numerator the moment the last byte lands while the
+    denominator keeps climbing, so a finished file that is still being checksummed decays
+    toward zero and reads as a stall - one pod showed 3.26 GB/s at 9% and 42.9 MB/s at
+    10% of the same install, with the network doing nothing differently. Samples older
+    than the window are dropped, so this reports what is happening now and settles
+    honestly at 0 when nothing is moving.
+
+    Throttled by time rather than capped by count. The httpx loop calls this once per
+    1 MiB chunk, which at 1 GB/s is a thousand times a second; bounding the deque by
+    length would quietly redefine the window as "the last N MiB" - a quarter of a second
+    at that rate - and a window that is not a window is how this class of bug started. At
+    a 0.1s floor the window holds at most ~40 samples on its own, and the aria2c poller's
+    0.5s tick is never throttled.
+
+    One sample is not a rate, so the first add() reports 0. Seed the window with the
+    transfer's own starting point before the loop begins: without that the first reading
+    is always 0, and on a file that finishes inside one poll interval it is the only
+    reading there is.
+    """
+
+    def __init__(self, window: float = 4.0, min_interval: float = 0.1) -> None:
+        self._window = window
+        self._min_interval = min_interval
+        self._samples: deque[tuple[float, int]] = deque()
+        self._last = 0.0
+
+    def add(self, now: float, done: int) -> float:
+        if self._samples and now - self._samples[-1][0] < self._min_interval:
+            return self._last
+        self._samples.append((now, done))
+        cutoff = now - self._window
+        # Keep two, so there is always a span to divide by.
+        while len(self._samples) > 2 and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+        oldest_at, oldest_done = self._samples[0]
+        span = now - oldest_at
+        self._last = max(0.0, (done - oldest_done) / span) if span > 0 else 0.0
+        return self._last
 
 
 def file_sha256(path: Path, on_progress: Any = None) -> str:
@@ -1588,6 +1662,23 @@ class JobController:
             and ARIA2C_PATH is not None
         )
 
+        # Only the aria2c path pays for the digest. aria2c's --checksum is not
+        # incremental for an HTTP download - it makes a second full pass over the
+        # finished file - and on MooseFS that read-back measured 4m41s against 3.75s for
+        # the download itself. The httpx path hashes the bytes as they stream past and
+        # hands the digest to _verify_and_place, so verification there is already free
+        # and stays on whatever the catalog says.
+        #
+        # This has to reach _verify_and_place too, not just the aria2c argv: that call
+        # takes verified_externally from _download_with_aria2c's return, so dropping only
+        # the flag would leave expected_sha set with verified_externally False and hash
+        # the file in Python instead - the same read-back, slower.
+        enforced_sha = (
+            expected_sha
+            if (not use_aria2 or should_verify_digest(file_spec, expected_size))
+            else ""
+        )
+
         # Bound in one branch each, read by the shared epilogue below.
         verified_externally = False
         inline_digest: str | None = None
@@ -1624,7 +1715,7 @@ class JobController:
                 download_ceiling,
                 expected_size,
                 start_size,
-                expected_sha,
+                enforced_sha,
             )
             fetch_seconds = time.monotonic() - fetch_started
             # Same units as start_size, so a resumed file reports only the new bytes.
@@ -1658,6 +1749,9 @@ class JobController:
 
             started = time.monotonic()
             request_started_at = partial_size
+            # started still times the whole transfer for the log line below; this is only
+            # what the panel shows, and it must not keep averaging over a stalled tail.
+            rate = RateWindow()
             try:
                 async with client.stream("GET", url, headers=headers) as response:
                     if response.status_code in {401, 403}:
@@ -1688,6 +1782,10 @@ class JobController:
                     response_length = int(response.headers.get("content-length", "0") or 0)
                     file_total = expected_size or (partial_size + response_length)
                     current = partial_size
+                    # Seeded here rather than beside the constructor: partial_size is
+                    # reset to 0 just above when the server ignored our Range, and a
+                    # baseline taken before that would read as negative progress.
+                    rate.add(time.monotonic(), current)
 
                     with partial.open(mode) as handle:
                         async for chunk in response.aiter_bytes(1024 * 1024):
@@ -1696,8 +1794,7 @@ class JobController:
                             if hasher is not None:
                                 hasher.update(chunk)
                             current += len(chunk)
-                            elapsed = max(time.monotonic() - started, 0.01)
-                            speed = (current - request_started_at) / elapsed
+                            speed = rate.add(time.monotonic(), current)
                             file_fraction = current / file_total if file_total else 0
                             overall_fraction = (
                                 (index + file_fraction) / max(file_count, 1)
@@ -1730,7 +1827,7 @@ class JobController:
             partial,
             destination,
             expected_size,
-            expected_sha,
+            enforced_sha,
             name,
             digest=None if use_aria2 else inline_digest,
             verified_externally=verified_externally,
@@ -1740,6 +1837,10 @@ class JobController:
         phases = [fetch_phrase]
         if verified_externally:
             phases.append("verified inline by aria2c")
+        elif use_aria2 and expected_sha and not enforced_sha:
+            # Say it out loud. A digest that stops running and logs nothing is
+            # indistinguishable from one that silently broke.
+            phases.append("digest skipped (catalog verify: false); length checked")
         elif expected_sha and inline_digest is None:
             # aria2c refused --checksum, so this fell back to a second pass. That is
             # the case the timing split is here to make visible.
@@ -1880,11 +1981,20 @@ class JobController:
         """Fetch one file on sixteen connections. True when aria2c verified it itself.
 
         aria2c's own output is still never parsed for progress - that comes from the
-        .part file's size. Its checksum support, however, is now used deliberately.
-        Reading a just-written file back to hash it measured at 60-80 MB/s on a pod
-        against 1.7 GB/s for a settled one, which made verification about 80% of a
-        19.7 GB install. Handing the digest to aria2c trades Python's SHA-256 for a
-        mature, widely deployed downloader's and removes the second pass over the data.
+        .part file's size.
+
+        --checksum does NOT remove the second pass, and an earlier version of this
+        docstring claimed it did. aria2c downloads the whole file, then walks it again to
+        hash it, reporting the two separately:
+
+            [#6a346f 3.0GiB/3.0GiB(100%) CN:0] [Checksum:#6a346f 137MiB/3.0GiB(4%)]
+
+        100% downloaded, no connections open, a checksum counter climbing on its own. It
+        buys a mature C implementation over Python's, which is worth having, but the read
+        is the cost and the read still happens: on a pod, 12.24 GB landed in 3.75s and
+        then spent 4m41s being re-read at 43 MB/s, because /workspace is MooseFS over
+        FUSE. That is why the caller may pass expected_sha="" for a file the RapidCache
+        server mirrored itself - see should_verify_digest.
         """
         global ARIA2C_SUPPORTS_CHECKSUM
 
@@ -1893,6 +2003,10 @@ class JobController:
 
         async def poll_progress() -> None:
             highest = start_size
+            rate = RateWindow()
+            # Seeded from where the transfer actually began, so the first tick half a
+            # second from now has a span to divide by rather than reporting 0.
+            rate.add(started, start_size)
             while True:
                 await asyncio.sleep(0.5)
                 # Returns 0 until aria2c creates the file; the monotonic guard below
@@ -1907,9 +2021,31 @@ class JobController:
                 # tick. A bar that goes backwards looks broken.
                 highest = max(highest, current)
                 current = highest
-                elapsed = max(time.monotonic() - started, 0.01)
-                speed = (current - start_size) / elapsed
+                speed = rate.add(time.monotonic(), current)
                 file_total = expected_size or current
+
+                if use_checksum and expected_size and current >= expected_size:
+                    # Every byte has landed but aria2c has not exited, which on this path
+                    # means it is making its checksum pass over the finished file -
+                    # minutes on MooseFS. Without this the panel sits at 100% showing a
+                    # rate with nothing behind it and looks hung.
+                    #
+                    # written_bytes rounds up to whole blocks and current is clamped to
+                    # expected_size above, so this can fire up to one block early; on a
+                    # multi-GB file that is the last instant of the transfer. total_bytes
+                    # is left out on purpose - update() writes only what it is given, so
+                    # the previous tick's value stands.
+                    self.update(
+                        stage="verifying",
+                        message=f"Verifying {name}…",
+                        bytes_per_second=0,
+                        file_downloaded_bytes=current,
+                        file_total_bytes=file_total,
+                        downloaded_bytes=completed_bytes + current,
+                        percent=((index + 1) / max(file_count, 1)) * download_ceiling,
+                    )
+                    continue
+
                 # Without the guard a catalog that omits size_bytes would make
                 # file_total equal current on every tick and the bar would read 100%.
                 file_fraction = (current / file_total) if expected_size else 0.0
@@ -1948,7 +2084,8 @@ class JobController:
             "--auto-file-renaming=false",
             "--summary-interval=0",
             "--console-log-level=warn",
-            # Verified as the bytes are written, so the file is never read back.
+            # Costs a full second pass over the finished file, not an inline hash. The
+            # caller decides whether that is worth paying; empty expected_sha means no.
             *(["--checksum=sha-256=" + expected_sha] if use_checksum else []),
             "-d",
             str(partial.parent),

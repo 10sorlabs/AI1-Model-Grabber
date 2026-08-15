@@ -1640,6 +1640,338 @@ def test_aria2c_progress_is_polled_from_the_part_file(tmp_path, monkeypatch) -> 
     assert len(observed) == settled[0]
 
 
+def drive_aria2_download(
+    tmp_path,
+    monkeypatch,
+    file_spec,
+    payload,
+    linger=0.0,
+    supports_checksum=True,
+):
+    """Run _download_file down the aria2c branch and report what it did.
+
+    aria2c is never executed. create_subprocess_exec is replaced with a stub that writes
+    the bytes a real download would have written, so these tests assert on the argument
+    list the launcher constructed rather than on any downloader's behaviour.
+
+    file_sha256 is counted rather than stubbed out, because on this path "did we read the
+    file back" is the whole question and the argv only answers half of it.
+
+    Returns a dict: argv, stages, error, hash_calls.
+    """
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir(exist_ok=True)
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+    monkeypatch.setattr(launcher_app, "ARIA2C_SUPPORTS_CHECKSUM", supports_checksum)
+
+    hashed: list[Path] = []
+    real_sha256 = launcher_app.file_sha256
+
+    def counting_sha256(path, on_progress=None):
+        hashed.append(path)
+        return real_sha256(path, on_progress)
+
+    monkeypatch.setattr(launcher_app, "file_sha256", counting_sha256)
+
+    captured: list[tuple[str, ...]] = []
+
+    class FakeProcess:
+        def __init__(self, target) -> None:
+            self.target = target
+            self.returncode = 0
+
+        async def communicate(self):
+            self.target.write_bytes(payload)
+            if linger:
+                # Held open so the poller sees a complete file next to a live process,
+                # which is exactly the state aria2c is in during its checksum pass.
+                await asyncio.sleep(linger)
+            return b"", b""
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        captured.append(argv)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1])
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+    controller = launcher_app.JobController()
+    stages: list[str] = []
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        if "stage" in changes:
+            stages.append(str(changes["stage"]))
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+
+    failure: list[Exception] = []
+
+    async def runner() -> None:
+        timeout = launcher_app.httpx.Timeout(connect=30, read=None, write=30, pool=30)
+        async with launcher_app.httpx.AsyncClient(
+            follow_redirects=True, timeout=timeout
+        ) as client:
+            try:
+                await controller._download_file(
+                    client, file_spec, 0, 1, 0, len(payload), 99
+                )
+            except Exception as exc:
+                failure.append(exc)
+
+    asyncio.run(runner())
+    return {
+        "argv": captured[0] if captured else (),
+        "stages": stages,
+        "error": failure[0] if failure else None,
+        "hash_calls": len(hashed),
+    }
+
+
+def mirrored_spec(payload, **overrides) -> dict:
+    spec = {
+        "name": "Mirrored model",
+        "url": "https://cdn.example/mirrored.safetensors",
+        "destination": "models/checkpoints/mirrored.safetensors",
+        "size_bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "auth": "none",
+        "parallel": True,
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_only_a_literal_false_turns_the_digest_off() -> None:
+    """The field is an optimisation the server opts into, never one we infer.
+
+    Everything that is not the boolean False means verify, so a server that has not
+    learned the field yet, a null, and a hand-edited catalog carrying the string "false"
+    all land on the safe side. Same reasoning as `parallel is True` in _download_file.
+    """
+    size = 1024
+    assert launcher_app.should_verify_digest({}, size) is True
+    assert launcher_app.should_verify_digest({"verify": True}, size) is True
+    assert launcher_app.should_verify_digest({"verify": None}, size) is True
+    assert launcher_app.should_verify_digest({"verify": "false"}, size) is True
+    assert launcher_app.should_verify_digest({"verify": 0}, size) is True
+    assert launcher_app.should_verify_digest({"verify": False}, size) is False
+
+    # The composition that must never leave a file with no gate at all: without a
+    # size_bytes the length check cannot run, so the digest stays on regardless.
+    assert launcher_app.should_verify_digest({"verify": False}, 0) is True
+
+
+def test_the_checksum_flag_follows_the_catalogs_verify_field(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """--checksum is what costs the four minutes, so this asserts on the argv itself.
+
+    aria2c's --checksum is not incremental for an HTTP download: it re-reads the finished
+    file, which on MooseFS measured 4m41s against 3.75s for the transfer. A file the
+    RapidCache server mirrored itself carries verify: false and must not get the flag.
+    """
+    payload = b"mirrored-payload" * 4096
+
+    # Distinct destinations: the same one twice would make the second call take the
+    # "already exists - skipped" branch and never reach aria2c at all.
+    trusted = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(
+            payload, verify=False, destination="models/checkpoints/trusted.safetensors"
+        ),
+        payload,
+    )
+    assert trusted["error"] is None
+    assert not [arg for arg in trusted["argv"] if arg.startswith("--checksum")]
+
+    untrusted = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload, destination="models/checkpoints/untrusted.safetensors"),
+        payload,
+    )
+    assert untrusted["error"] is None
+    assert (
+        "--checksum=sha-256=" + hashlib.sha256(payload).hexdigest()
+    ) in untrusted["argv"]
+
+
+def test_a_skipped_digest_is_not_quietly_rehashed_in_python(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Dropping --checksum without also clearing the sha makes this slower, not faster.
+
+    _verify_and_place takes verified_externally from _download_with_aria2c's return, which
+    is just use_checksum. Remove the flag alone and that becomes False, so a still-populated
+    expected_sha sends the file through file_sha256 instead - the same read-back this
+    change exists to remove, now in Python rather than aria2c's C, and with a green suite
+    because the argv assertion above still passes.
+
+    So this asserts the behaviour rather than the argument: the file is never read back.
+    The two other spellings of "correct" also hash zero times, and only the bug hashes
+    once, so the count is what separates them - and the ARIA2C_SUPPORTS_CHECKSUM=False leg
+    proves the counter is wired to something that can fire.
+    """
+    payload = b"unhashed-payload" * 4096
+
+    mirrored = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(
+            payload, verify=False, destination="models/checkpoints/mirrored.safetensors"
+        ),
+        payload,
+    )
+    assert mirrored["error"] is None
+    assert mirrored["hash_calls"] == 0
+
+    # Positive control. With --checksum unavailable there is nothing to trust, so the
+    # fallback second pass must happen - if this were also 0 the assertion above would be
+    # proving only that the probe is dead.
+    fallback = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload, destination="models/checkpoints/fallback.safetensors"),
+        payload,
+        supports_checksum=False,
+    )
+    assert fallback["error"] is None
+    assert fallback["hash_calls"] == 1
+
+
+def test_a_verify_false_spec_with_no_size_still_gets_its_checksum(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The length check and the digest are alternatives; one of them always runs.
+
+    _verify_and_place only compares lengths when expected_size is truthy, so honouring
+    verify: false on a spec with no size_bytes would leave the file with no integrity
+    check of any kind. That combination keeps the digest instead.
+    """
+    payload = b"sizeless-payload" * 4096
+    spec = mirrored_spec(payload, verify=False)
+    spec.pop("size_bytes")
+
+    result = drive_aria2_download(tmp_path, monkeypatch, spec, payload)
+
+    assert result["error"] is None
+    assert (
+        "--checksum=sha-256=" + hashlib.sha256(payload).hexdigest()
+    ) in result["argv"]
+
+
+def test_a_wrong_length_still_fails_a_file_whose_digest_was_skipped(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """With the digest gone the length check is the only gate, so it has to be real.
+
+    Guards launcher/app.py's `if expected_size and partial.stat().st_size != expected_size`
+    against being removed by someone who assumes the checksum covers it.
+    """
+    payload = b"truncated-payload" * 4096
+    # The catalog claims more bytes than aria2c will produce.
+    spec = mirrored_spec(payload, verify=False, size_bytes=len(payload) + 4096)
+
+    result = drive_aria2_download(tmp_path, monkeypatch, spec, payload)
+
+    assert isinstance(result["error"], RuntimeError)
+    assert "wrong size" in str(result["error"])
+
+
+def test_the_poller_names_the_checksum_pass_instead_of_freezing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A file that has landed but is still being hashed must not look like a stall.
+
+    Every byte is on disk while aria2c is still running, which on this path can only mean
+    its checksum pass. This also pins the placement of that block: it reads file_total,
+    and poll_progress is a bare create_task nobody awaits, so a NameError there would be
+    swallowed and the panel would simply freeze with a clean console.
+    """
+    payload = b"lingering-payload" * 4096
+
+    result = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload),
+        payload,
+        # Longer than the 0.5s poll interval, so at least one tick sees the finished
+        # file beside a process that has not exited.
+        linger=1.2,
+    )
+
+    assert result["error"] is None
+    assert "verifying" in result["stages"]
+
+
+def test_the_displayed_rate_is_a_window_not_a_lifetime_average() -> None:
+    """The panel read 3.26 GB/s at 9% and 42.9 MB/s at 10% of one install.
+
+    The network did nothing differently; the numerator froze when the bytes landed while
+    the denominator kept climbing. A trailing window reports what is happening now.
+    """
+    window = launcher_app.RateWindow(window=4.0, min_interval=0.1)
+
+    # One sample is not a rate.
+    assert window.add(0.0, 0) == 0.0
+
+    # A steady 100 MB/s reads back as 100 MB/s.
+    for tick in range(1, 21):
+        rate = window.add(tick * 0.5, int(tick * 0.5 * 100e6))
+    assert 95e6 < rate < 105e6
+
+    # The bytes stop but the clock does not - a lifetime average would decay slowly
+    # while this settles at zero once the window has passed over the stall.
+    done = int(10.0 * 100e6)
+    for tick in range(1, 11):
+        rate = window.add(10.0 + tick * 0.5, done)
+    assert rate == 0.0
+
+
+def test_a_fast_stream_is_measured_over_the_window_not_the_last_few_samples() -> None:
+    """The httpx loop samples per 1 MiB, which at 1 GB/s is a thousand calls a second.
+
+    Bounding the deque by sample count would quietly redefine the window as "the last N
+    MiB" - a quarter of a second at that rate - so a brief stall at the end would read as
+    a total stop. Throttling by time keeps the window four real seconds wide.
+    """
+    window = launcher_app.RateWindow(window=4.0, min_interval=0.1)
+
+    now, done = 0.0, 0
+    window.add(now, done)
+    # Three seconds at 1 GB/s, sampled every millisecond: 3000 calls, far more than any
+    # plausible sample cap.
+    for _ in range(3000):
+        now += 0.001
+        done += 1_000_000
+        window.add(now, done)
+
+    # Then a brief stall, well inside the four-second window.
+    for _ in range(300):
+        now += 0.001
+        rate = window.add(now, done)
+
+    # Most of the window is still the fast stretch, so the reading stays high. A
+    # count-bounded window would have forgotten it and reported ~0.
+    assert rate > 5e8
+
+
 def test_aria2c_progress_tracks_bytes_written_not_the_file_extent(
     tmp_path,
     monkeypatch,
