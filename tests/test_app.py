@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import errno
 import hashlib
 import importlib
 import json
@@ -23,6 +24,10 @@ os.environ["RUNPOD_POD_ID"] = "test-pod"
 launcher_app = importlib.import_module("launcher.app")
 launcher_remote = importlib.import_module("launcher.remote")
 
+# Captured before any fixture can replace it: pin_the_hosts_filesystem swaps this out for
+# every test, and the probe's own test is the one place that has to run the real syscalls.
+probe_block_accounting = launcher_app._probe_block_accounting
+
 
 @pytest.fixture(autouse=True)
 def reset_remote_catalog_state():
@@ -30,6 +35,36 @@ def reset_remote_catalog_state():
     launcher_remote._reset_state()
     yield
     launcher_remote._reset_state()
+
+
+@pytest.fixture(autouse=True)
+def pin_the_hosts_filesystem(monkeypatch):
+    """No test may depend on this machine's device layout, free space or block accounting.
+
+    _download_file calls scratch_partial_for on every download, and _scratch_dir is a
+    module global that outlives a test. So on any machine where _resolve_scratch_dir()
+    happens to find a second device - a container with a tmpfs /tmp over an overlayfs /,
+    which is the CI shape - the whole suite would silently start staging, and
+    test_parallel_file_downloads_through_aria2c asserts on a -o filename that staging
+    rewrites. None here means "resolved: no scratch device", not "not yet resolved".
+
+    The same for the block-accounting probe, which would otherwise ask whatever
+    filesystem pytest's tmp_path landed on and answer differently on Windows, on ext4
+    and in a container. Pinned honest, so the default path behaves as it does on a pod
+    that stages.
+
+    Both are opt-out: a test that wants staging or a lying volume sets its own value and
+    monkeypatch restores these afterwards. .github/workflows/docker-publish.yml runs the
+    suite before it builds the image, so a host-dependent test blocks publishing.
+
+    The probe is pinned at the syscall layer rather than at blocks_are_real, so every
+    test still runs the real caching and the real one-line downgrade log. Fresh cache
+    objects per test, so one test's verdict cannot leak into another's directory.
+    """
+    monkeypatch.setattr(launcher_app, "_scratch_dir", None)
+    monkeypatch.setattr(launcher_app, "_probe_block_accounting", lambda _directory: True)
+    monkeypatch.setattr(launcher_app, "_block_accounting", {})
+    monkeypatch.setattr(launcher_app, "_block_accounting_logged", set())
 
 
 @contextlib.contextmanager
@@ -1751,6 +1786,21 @@ def mirrored_spec(payload, **overrides) -> dict:
     return spec
 
 
+def pretend_free_space(monkeypatch, free_bytes: int) -> None:
+    """Answer every disk_usage with this much free, so no test asks the real machine.
+
+    scratch_partial_for wants expected_size + a 2 GB margin, and copy_into_place refuses
+    to start when the destination has less room than the source. Both are correct and
+    both would otherwise make a passing test a property of the host's spare disk - on a
+    CI runner that publishes the image only if the suite passes first.
+    """
+    monkeypatch.setattr(
+        launcher_app.shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(free_bytes, 0, free_bytes),
+    )
+
+
 def test_only_a_literal_false_turns_the_digest_off() -> None:
     """The field is an optimisation the server opts into, never one we infer.
 
@@ -1850,6 +1900,446 @@ def test_a_skipped_digest_is_not_quietly_rehashed_in_python(
     )
     assert fallback["error"] is None
     assert fallback["hash_calls"] == 1
+
+
+def test_resolving_scratch_creates_nothing(tmp_path, monkeypatch) -> None:
+    """Importing this module must not touch the filesystem.
+
+    An earlier draft resolved at module scope with a mkdir inside the resolver, so
+    `import launcher.app` created /root/.10sorlabs-scratch or /tmp/10sorlabs-scratch on a
+    developer machine, in CI, and at pytest collection.
+    """
+    wanted = tmp_path / "scratch-that-should-not-appear"
+    monkeypatch.setenv("LCT_SCRATCH_DIR", str(wanted))
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+
+    launcher_app._resolve_scratch_dir()
+
+    assert not wanted.exists()
+
+
+def test_scratch_is_only_used_when_it_is_a_different_device(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Different device is the whole point.
+
+    On a pod with no network volume the models tree is already on container disk, and
+    staging would buy a second full copy of every byte for nothing.
+    """
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    candidate = tmp_path / "same-device"
+    # Created so the resolver judges the candidate itself rather than walking up to its
+    # nearest existing ancestor, which here would be tmp_path - the models tree.
+    candidate.mkdir()
+    monkeypatch.setenv("LCT_SCRATCH_DIR", str(candidate))
+
+    # tmp_path and the override are the same filesystem, so every candidate is rejected
+    # and the caller keeps writing beside the destination.
+    assert launcher_app._resolve_scratch_dir() is None
+
+    real_stat = Path.stat
+
+    def pretend_other_device(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if "same-device" in str(self):
+            return os.stat_result(
+                (result.st_mode, result.st_ino, result.st_dev + 1)
+                + tuple(result)[3:]
+            )
+        return result
+
+    monkeypatch.setattr(Path, "stat", pretend_other_device)
+    assert launcher_app._resolve_scratch_dir() == candidate
+
+
+def test_staging_never_costs_a_download_that_would_otherwise_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Container disk on a stock RunPod template is small.
+
+    A 20 GB model must still install on a pod that cannot stage it, so every one of these
+    falls back to writing beside the destination rather than failing.
+    """
+    scratch = tmp_path / "scratch"
+    monkeypatch.setattr(launcher_app, "_scratch_dir", scratch)
+    destination = tmp_path / "ComfyUI" / "models" / "checkpoints" / "big.safetensors"
+    gigabyte = 1024**3
+
+    def with_free(free_bytes):
+        pretend_free_space(monkeypatch, free_bytes)
+
+    # Ample room: 10 GB file, 300 GB free.
+    with_free(300 * gigabyte)
+    staged = launcher_app.scratch_partial_for(destination, 10 * gigabyte)
+    assert staged is not None and staged.parent == scratch
+
+    # Same file, only 11 GB free - inside the 2 GB margin, so no.
+    with_free(11 * gigabyte)
+    assert launcher_app.scratch_partial_for(destination, 10 * gigabyte) is None
+
+    # A catalog with no size_bytes cannot be judged, so it is not staged.
+    with_free(300 * gigabyte)
+    assert launcher_app.scratch_partial_for(destination, 0) is None
+
+    # No scratch device at all.
+    monkeypatch.setattr(launcher_app, "_scratch_dir", None)
+    assert launcher_app.scratch_partial_for(destination, 10 * gigabyte) is None
+
+
+def test_placement_renames_on_one_device_and_copies_across_two(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """os.replace is free within a filesystem and impossible across one."""
+    payload = b"placement-payload" * 4096
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    # Same device: the copy helper must never run.
+    def explode(*_args, **_kwargs):
+        raise AssertionError("copy_into_place ran for a same-device placement")
+
+    monkeypatch.setattr(launcher_app, "copy_into_place", explode)
+    controller = launcher_app.JobController()
+    completed, place_seconds = asyncio.run(
+        controller._verify_and_place(source, destination, len(payload), "", "Placed")
+    )
+    assert completed == len(payload)
+    assert place_seconds == 0.0
+    assert destination.read_bytes() == payload
+    assert not source.exists()
+
+
+def test_a_cross_device_placement_copies_and_lands_byte_identical(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"cross-device-payload" * 8192
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    real_replace = os.replace
+    refused: list[int] = []
+
+    def refuse_the_first_rename(src, dst, *args, **kwargs):
+        # EXDEV is what a rename from container disk to the models volume actually
+        # raises; the sidecar rename inside copy_into_place must still go through.
+        if not refused and str(src).endswith("staged.part"):
+            refused.append(1)
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(launcher_app.os, "replace", refuse_the_first_rename)
+
+    controller = launcher_app.JobController()
+    completed, place_seconds = asyncio.run(
+        controller._verify_and_place(source, destination, len(payload), "", "Placed")
+    )
+
+    assert refused, "the test never exercised the cross-device path"
+    assert completed == len(payload)
+    assert place_seconds >= 0
+    assert destination.read_bytes() == payload
+    assert not source.exists(), "the staged copy was left behind"
+    assert not (destination.parent / (destination.name + ".placing")).exists()
+
+
+def test_a_crash_mid_placement_leaves_nothing_at_the_destination(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A truncated file at the real path would be trusted forever.
+
+    _download_file opens by checking whether the destination already exists at the right
+    length and skipping the download if so. A half-copied file there is not a slow
+    install, it is a corrupt model that never gets repaired.
+    """
+    # Three 8 MiB reads, so raising on the second genuinely lands mid-copy with a partly
+    # written sidecar on disk - not after the last chunk, where there is nothing to lose.
+    payload = b"x" * (20 * 1024 * 1024)
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    calls = {"n": 0}
+
+    def die_part_way(done: int) -> None:
+        calls["n"] += 1
+        assert done < len(payload), "the crash must land before the last chunk"
+        if calls["n"] >= 2:
+            raise RuntimeError("simulated crash mid-copy")
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        launcher_app.copy_into_place(source, destination, die_part_way)
+
+    assert not destination.exists()
+    assert not (destination.parent / (destination.name + ".placing")).exists()
+    assert source.exists(), "the staged copy is the only surviving original"
+
+
+def test_cancel_is_answered_during_a_placement(tmp_path, monkeypatch) -> None:
+    """A 20 GB copy is a minute of a Cancel button that does nothing, without this."""
+    payload = b"cancelled-payload" * 8192
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    controller = launcher_app.JobController()
+    controller.cancel_event.set()
+
+    with pytest.raises(launcher_app.InstallCancelled):
+        launcher_app.copy_into_place(
+            source, destination, None, controller.check_cancelled
+        )
+
+    assert not destination.exists()
+    assert not (destination.parent / (destination.name + ".placing")).exists()
+
+
+def test_placement_refuses_before_copying_when_the_volume_is_full(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Otherwise ENOSPC surfaces after a complete download, having spent every byte twice."""
+    payload = b"too-big-payload" * 4096
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        launcher_app.shutil,
+        "disk_usage",
+        lambda _path: shutil._ntuple_diskusage(len(payload) // 2, 0, len(payload) // 2),
+    )
+
+    with pytest.raises(RuntimeError, match="Not enough room"):
+        launcher_app.copy_into_place(source, destination)
+
+    assert not destination.exists()
+    assert not (destination.parent / (destination.name + ".placing")).exists()
+
+
+def test_a_staged_download_writes_to_scratch_and_lands_on_the_volume(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The staged path, end to end, through the code the panel actually runs.
+
+    The unit tests above cover scratch_partial_for and copy_into_place separately. This
+    is the one that fails if _download_file stops routing the .part through scratch, or
+    stops placing it afterwards - the seam between them, which no unit test can see.
+    """
+    payload = b"staged-payload" * 4096
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(launcher_app, "_scratch_dir", scratch)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    result = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload, destination="models/checkpoints/staged.safetensors"),
+        payload,
+    )
+
+    assert result["error"] is None
+    argv = result["argv"]
+    # aria2c was pointed at container disk, not at the models tree.
+    assert Path(argv[argv.index("-d") + 1]) == scratch
+    # Derived from the destination rather than random, so --continue still means
+    # something after a restart.
+    written = argv[argv.index("-o") + 1]
+    assert written.endswith("-staged.safetensors.part") and written != "staged.part"
+
+    destination = tmp_path / "ComfyUI" / "models" / "checkpoints" / "staged.safetensors"
+    assert destination.read_bytes() == payload
+    # Nothing left behind on either side of the placement.
+    assert list(scratch.iterdir()) == []
+    assert not (destination.parent / (destination.name + ".placing")).exists()
+
+
+def test_the_sweep_clears_stale_staging_files_but_not_fresh_ones(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Cancel keeps partials on purpose; the sweep is only for what a kill leaves.
+
+    The age bound is what keeps "Partial downloads can resume later" true for a launcher
+    that crashed and came back a minute ago.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    comfy = tmp_path / "ComfyUI"
+    (comfy / "models" / "checkpoints").mkdir(parents=True)
+    monkeypatch.setattr(launcher_app, "_scratch_dir", scratch)
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy)
+
+    stale = scratch / "aaaa-old.part"
+    stale_control = scratch / "aaaa-old.part.aria2"
+    fresh = scratch / "bbbb-new.part"
+    sidecar = comfy / "models" / "checkpoints" / "model.safetensors.placing"
+    for path in (stale, stale_control, fresh, sidecar):
+        path.write_bytes(b"x")
+
+    long_ago = time.time() - 48 * 60 * 60
+    for path in (stale, stale_control, sidecar):
+        os.utime(path, (long_ago, long_ago))
+
+    removed = launcher_app.sweep_scratch()
+
+    assert removed == 3
+    assert not stale.exists() and not stale_control.exists()
+    assert not sidecar.exists(), "a .placing left by a kill would sit where ComfyUI scans"
+    assert fresh.exists(), "a recent partial is still resumable"
+
+
+def test_the_sweep_does_nothing_without_a_scratch_device(tmp_path, monkeypatch) -> None:
+    """Most of the suite boots the app through TestClient, which runs the lifespan."""
+    monkeypatch.setattr(launcher_app, "_scratch_dir", None)
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "nothing-here")
+
+    assert launcher_app.sweep_scratch() == 0
+
+
+def test_the_probe_spots_a_filesystem_that_derives_blocks_from_length(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The one test that runs the probe's real syscalls, with only the answer faked.
+
+    MooseFS does no allocation accounting: mfs_fuse.c:1127,1135,1143 compute st_blocks as
+    (attrlength+511)/512, straight from the file's length. So a 1 MiB sparse file holding
+    512 bytes reports every one of those bytes as allocated, and anything downstream that
+    reads st_blocks as "bytes written" is reading the extent instead. ext4 answers one
+    4 KiB block for the same file - a 256x margin between the two verdicts.
+    """
+
+    class FakeStat:
+        def __init__(self, size: int, blocks: int) -> None:
+            self.st_size = size
+            self.st_blocks = blocks
+
+    opened: dict = {}
+    real_mkstemp = tempfile.mkstemp
+    real_fstat = os.fstat
+
+    def recording_mkstemp(*args, **kwargs):
+        handle, name = real_mkstemp(*args, **kwargs)
+        opened["fd"] = handle
+        opened["name"] = name
+        return handle, name
+
+    monkeypatch.setattr(launcher_app.tempfile, "mkstemp", recording_mkstemp)
+
+    def answer_with(size: int, blocks: int) -> None:
+        def fake_fstat(fd):
+            # Only ever ours: pytest's own capture machinery stats descriptors too, and
+            # handing it a FakeStat would break the run rather than the assertion.
+            if fd == opened.get("fd"):
+                return FakeStat(size, blocks)
+            return real_fstat(fd)
+
+        monkeypatch.setattr(launcher_app.os, "fstat", fake_fstat)
+
+    length = launcher_app._PROBE_LENGTH
+
+    # ext4, tmpfs, overlayfs: one block, because one block is what was written.
+    answer_with(length, 4096 // 512)
+    assert probe_block_accounting(tmp_path) is True
+
+    # MooseFS, using its own arithmetic rather than an approximation of it.
+    answer_with(length, (length + 511) // 512)
+    assert probe_block_accounting(tmp_path) is False
+
+    # A platform with no allocation accounting at all is not a filesystem that lies:
+    # written_bytes falls back to the extent on Windows and that is correct there,
+    # because nothing on Windows runs a segmented download.
+    class NoBlocks:
+        st_size = length
+
+    monkeypatch.setattr(
+        launcher_app.os,
+        "fstat",
+        lambda fd: NoBlocks() if fd == opened.get("fd") else real_fstat(fd),
+    )
+    assert probe_block_accounting(tmp_path) is True
+
+    # Whatever the verdict, the probe file itself is not left behind.
+    assert not Path(opened["name"]).exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unprobeable_directory_is_not_cached_and_says_so_once(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    """A directory that cannot be probed loses the progress display. Say so, once.
+
+    This project has been caught more than once by a fallback that logged nothing, which
+    is how a fabricated 94% survived long enough to cost a day. A definite verdict is
+    cached; "could not tell" is not, so a full or read-only directory is asked again on
+    the next file rather than written off for the life of the process.
+    """
+    verdicts: list = []
+    asked: list[Path] = []
+
+    def probe(directory):
+        asked.append(Path(directory))
+        return verdicts.pop(0)
+
+    monkeypatch.setattr(launcher_app, "_probe_block_accounting", probe)
+
+    # Definite: probed once, cached, and the downgrade is announced exactly once.
+    verdicts.extend([False])
+    assert launcher_app.blocks_are_real(tmp_path) is False
+    assert launcher_app.blocks_are_real(tmp_path) is False
+    assert len(asked) == 1
+    announced = capsys.readouterr().out
+    assert announced.count("10sorLabs launcher:") == 1
+    assert "derived from the file's length" in announced
+
+    # Indefinite: asked again every time, still refused, still only one line about it.
+    other = tmp_path / "unprobeable"
+    other.mkdir()
+    verdicts.extend([None, None])
+    assert launcher_app.blocks_are_real(other) is False
+    assert launcher_app.blocks_are_real(other) is False
+    assert asked.count(other) == 2
+    announced = capsys.readouterr().out
+    assert announced.count("10sorLabs launcher:") == 1
+    assert "could not establish block accounting" in announced
+
+
+def test_written_bytes_refuses_to_guess_where_blocks_are_derived(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """None is not zero: it is "this filesystem cannot answer the question"."""
+    partial = tmp_path / "model.safetensors.part"
+    partial.write_bytes(b"x" * 8192)
+
+    measured = launcher_app.written_bytes(partial)
+    assert measured is not None and measured > 0
+    # The poller leans on this: 0 until aria2c creates the file, never None.
+    assert launcher_app.written_bytes(tmp_path / "not-created-yet.part") == 0
+
+    monkeypatch.setattr(launcher_app, "_block_accounting", {})
+    monkeypatch.setattr(launcher_app, "_probe_block_accounting", lambda _directory: False)
+    assert launcher_app.written_bytes(partial) is None
 
 
 def test_a_verify_false_spec_with_no_size_still_gets_its_checksum(
@@ -2092,6 +2582,127 @@ def test_aria2c_progress_tracks_bytes_written_not_the_file_extent(
     # 3. Never decreases, even when the block count reads lower than last tick.
     assert observed[2] == total
     assert controller.state.percent <= 99
+
+
+def test_the_panel_reports_nothing_rather_than_94_percent_on_a_lying_volume(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The test above asserts against the one filesystem where this bug cannot happen.
+
+    MooseFS derives st_blocks from the file's length (mfs_fuse.c:1127,1135,1143), and
+    aria2c -s16 opens its sixteenth connection at 15/16 of the file inside the first
+    second - so the extent pins at 93.75% immediately and the panel then climbs at one
+    connection's rate instead of the transfer's. Every observed stall sat just above
+    93.75% and never below: 93.87, 94.42, 94.92, 97.77.
+
+    So: 15% of the bytes have actually arrived, the extent already reads 93.75%, and the
+    panel must publish neither that number nor anything derived from it.
+    """
+    total = 16 * 1024 * 1024
+    landed = total * 15 // 100
+    extent = total * 15 // 16
+    index, file_count, ceiling = 2, 5, 99
+    boundary = (index / file_count) * ceiling
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    partial = comfy_dir / "moosefs.safetensors.part"
+    monkeypatch.setattr(launcher_app, "ARIA2C_PATH", "/usr/bin/aria2c")
+    monkeypatch.setattr(launcher_app, "_probe_block_accounting", lambda _directory: False)
+
+    class FakeStat:
+        def __init__(self, size: int) -> None:
+            self.st_size = size
+            # The MooseFS client's own arithmetic.
+            self.st_blocks = (size + 511) // 512
+
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self != partial:
+            return real_stat(self, *args, **kwargs)
+        return FakeStat(extent)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    gate: dict = {}
+    observed: list[dict] = []
+
+    class FakeProcess:
+        def __init__(self, target) -> None:
+            self.target = target
+            self.returncode = 0
+
+        async def communicate(self):
+            # What has genuinely landed - 15%, against an extent already at 93.75%.
+            self.target.write_bytes(b"x" * landed)
+            await gate["done"].wait()
+            return b"", b""
+
+    async def fake_exec(*command, **_kwargs):
+        argv = tuple(str(part) for part in command)
+        directory = Path(argv[argv.index("-d") + 1])
+        return FakeProcess(directory / argv[argv.index("-o") + 1])
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", fake_exec)
+
+    controller = launcher_app.JobController()
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        if "file_downloaded_bytes" in changes:
+            observed.append(changes)
+            if len(observed) >= 2:
+                gate["done"].set()
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+
+    async def runner() -> None:
+        gate["done"] = asyncio.Event()
+        await controller._download_with_aria2c(
+            "https://cdn.example/moosefs.safetensors",
+            partial,
+            "MooseFS model",
+            index,
+            file_count,
+            index * total,
+            file_count * total,
+            ceiling,
+            total,
+            0,
+        )
+
+    asyncio.run(runner())
+
+    # The premise, not an assumption: 15% of the file is really there, and the number the
+    # poller declined to publish is really sitting in the stat.
+    assert os.stat(partial).st_size == landed
+    monkeypatch.setattr(launcher_app, "_block_accounting", {})
+    monkeypatch.setattr(launcher_app, "_probe_block_accounting", lambda _directory: True)
+    fabricated = launcher_app.written_bytes(partial)
+    assert fabricated / total > 0.93, "the 94% this test exists for is not reproduced"
+
+    # Not one tick of it reached the panel: no byte count, no total, no rate.
+    assert len(observed) >= 2
+    assert all(change["file_downloaded_bytes"] == 0 for change in observed)
+    assert all(change["file_total_bytes"] == 0 for change in observed)
+    assert all(change["bytes_per_second"] == 0 for change in observed)
+    # The bar stays on the file boundary. Trusting the extent would have put it at
+    # (2 + 0.9375) / 5 * 99 = 58.2%, climbing on one connection's progress.
+    assert all(change["percent"] == pytest.approx(boundary) for change in observed)
+    assert controller.state.percent == pytest.approx(boundary)
+    # And the aggregate byte counter never took the extent either.
+    assert controller.state.downloaded_bytes == 0
+
+    # Indeterminate, but not frozen: elapsed time is the one number here that cannot
+    # lie, and without something moving this panel reads as hung - which is the failure
+    # this whole investigation began with.
+    assert re.search(r"\d+s \(progress not measurable", controller.state.message)
+    assert launcher_app.human_duration(0) == "0s"
+    assert launcher_app.human_duration(47.9) == "47s"
+    assert launcher_app.human_duration(252) == "4m12s"
 
 
 def test_cancelling_an_aria2c_download_terminates_the_process(

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -15,6 +17,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -271,6 +276,140 @@ def validate_model_location(raw_location: str) -> tuple[str, Path]:
     if not destination.is_relative_to(models_dir):
         raise RuntimeError("The model location must stay inside ComfyUI/models.")
     return relative.as_posix(), destination
+
+
+_UNRESOLVED: Any = object()
+_scratch_dir: Any = _UNRESOLVED
+
+
+def _resolve_scratch_dir() -> Path | None:
+    """Inspect only - this never creates anything. See scratch_dir()."""
+    anchor = COMFYUI_DIR
+    while not anchor.exists() and anchor != anchor.parent:
+        anchor = anchor.parent
+    try:
+        models_device = anchor.stat().st_dev
+    except OSError:
+        return None
+
+    candidates: list[Path] = []
+    override = os.getenv("LCT_SCRATCH_DIR", "").strip()
+    if override:
+        candidates.append(Path(override))
+    candidates.append(Path("/root/.10sorlabs-scratch"))
+    candidates.append(Path(tempfile.gettempdir()) / "10sorlabs-scratch")
+
+    for candidate in candidates:
+        # The candidate itself usually does not exist yet, so judge its nearest existing
+        # ancestor: that is the filesystem it would be created on.
+        probe = candidate
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            if probe.stat().st_dev == models_device:
+                continue
+            if not os.access(probe, os.W_OK):
+                continue
+        except OSError:
+            continue
+        return candidate
+    return None
+
+
+def scratch_dir() -> Path | None:
+    """A directory on a different device from the models tree, or None. Cached.
+
+    Downloading straight into COMFYUI_DIR caps at ~25 MB/s on a pod whose /workspace is
+    MooseFS over FUSE, against 460 MB/s to container disk - same URL, same binary, same
+    pod, measured. Connection count makes no difference there: 24 MB/s on one connection
+    against 26 MB/s on sixteen. So this is a property of the destination, not of how
+    aria2c writes, and which property of the FUSE write path is responsible is not
+    established. Nothing here should be written as though it were.
+
+    A different device is the whole test. On a pod with no network volume the models tree
+    is already local, and staging would buy a second copy of every byte for nothing.
+
+    Resolved on first use rather than at import, and it creates nothing: importing this
+    module must not touch the filesystem.
+    """
+    global _scratch_dir
+    if _scratch_dir is _UNRESOLVED:
+        _scratch_dir = _resolve_scratch_dir()
+    return _scratch_dir
+
+
+def scratch_partial_for(destination: Path, expected_size: int) -> Path | None:
+    """Where to download this file, or None to write beside its destination.
+
+    Container disk on a stock RunPod template is small, and a 20 GB model must still
+    install on a pod that cannot stage it. This is a speed optimisation and must never be
+    the difference between a download working and failing.
+
+    The name is derived from the destination rather than random, so a resumed download
+    finds the same .part and aria2c's --continue still means something.
+    """
+    root = scratch_dir()
+    if root is None or expected_size <= 0:
+        return None
+    try:
+        # First actual use, deliberately not at import.
+        root.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(root).free
+    except OSError:
+        return None
+    margin = max(2 * 1024**3, expected_size // 10)
+    if free < expected_size + margin:
+        return None
+    stem = hashlib.sha256(str(destination).encode("utf-8")).hexdigest()[:16]
+    return root / f"{stem}-{destination.name}.part"
+
+
+def sweep_scratch(max_age_seconds: float = 24 * 60 * 60) -> int:
+    """Clear litter left by an install that was killed rather than cancelled.
+
+    Container disk survives a pod restart within a session, so a SIGKILL, an OOM or a pod
+    stop leaves a staged .part that nothing else removes - cancel deliberately keeps them,
+    because the panel promises "Partial downloads can resume later".
+
+    The age bound is what keeps that promise: nothing is in flight at boot, but a launcher
+    that crashed and came back a minute ago may still have a resumable 20 GB file on disk.
+
+    Also clears *.placing and .10sorlabs-probe-* from the models tree. That sidecar has
+    to live beside its destination for the rename to be atomic, and copy_into_place's
+    finally covers an exception but not a kill, so a dead one would sit where ComfyUI
+    scans; the probe file is the same story with a smaller footprint.
+    """
+    removed = 0
+    now = time.time()
+
+    def clear(path: Path) -> None:
+        nonlocal removed
+        try:
+            if now - path.stat().st_mtime < max_age_seconds:
+                return
+            path.unlink()
+            removed += 1
+        except OSError:
+            return
+
+    root = scratch_dir()
+    if root is not None and root.is_dir():
+        for pattern in ("*.part", "*.part.aria2"):
+            for path in root.glob(pattern):
+                clear(path)
+
+    models_dir = COMFYUI_DIR / "models"
+    if models_dir.is_dir():
+        for pattern in ("*.placing", ".10sorlabs-probe-*"):
+            for path in models_dir.rglob(pattern):
+                clear(path)
+
+    if removed:
+        print(
+            f"10sorLabs launcher: cleared {removed} stale staging file(s).",
+            flush=True,
+        )
+    return removed
 
 
 def available_model_locations() -> list[str]:
@@ -632,15 +771,109 @@ def link_or_copy(source: Path, target: Path) -> bool:
         return False
 
 
-def written_bytes(path: Path) -> int:
-    """Bytes actually on disk, not the file's extent.
+_PROBE_LENGTH = 1024 * 1024
+_block_accounting: dict[str, bool] = {}
+_block_accounting_logged: set[str] = set()
+
+
+def _probe_block_accounting(directory: Path) -> bool | None:
+    """Does this filesystem count allocated blocks, or derive them from length?
+
+    Writes a 1 MiB sparse file with 512 bytes at the far end and asks how much of it is
+    allocated. A filesystem that does real accounting answers with one block; one that
+    computes the field from the file's length answers with the whole extent.
+
+    True when the count is real, False when it is derived, None when it could not be
+    established at all - an unwritable or full directory. None is not False: it is not
+    cached, so a transient failure is retried on the next file.
+    """
+    try:
+        handle, name = tempfile.mkstemp(dir=directory, prefix=".10sorlabs-probe-")
+    except OSError:
+        return None
+    probe = Path(name)
+    try:
+        os.ftruncate(handle, _PROBE_LENGTH)
+        # lseek + write rather than pwrite, which does not exist on Windows.
+        os.lseek(handle, _PROBE_LENGTH - 512, os.SEEK_SET)
+        os.write(handle, b"\0" * 512)
+        # Without this the answer can come from the page cache before the filesystem has
+        # had to commit to one, which is the whole question being asked.
+        os.fsync(handle)
+        stat = os.fstat(handle)
+    except OSError:
+        return None
+    finally:
+        os.close(handle)
+        probe.unlink(missing_ok=True)
+
+    blocks = getattr(stat, "st_blocks", None)
+    if blocks is None:
+        # Windows, which has no allocation accounting to be wrong about. written_bytes
+        # falls back to the extent there and that is correct, because nothing on Windows
+        # runs a real segmented download.
+        return True
+    return blocks * 512 < stat.st_size
+
+
+def blocks_are_real(directory: Path) -> bool:
+    """Whether written_bytes() can mean anything in this directory. Cached, lazy.
+
+    One probe per directory, on first use - never at import. Only a definite answer is
+    cached; a directory that could not be probed is asked again next time.
+
+    Both downgrades are printed once per directory. This project has been caught more
+    than once by a silent fallback, and a panel that quietly stops reporting progress is
+    exactly the kind of thing nobody notices until it costs a day.
+    """
+    key = str(directory)
+    known = _block_accounting.get(key)
+    if known is not None:
+        return known
+
+    verdict = _probe_block_accounting(directory)
+    if verdict is not None:
+        _block_accounting[key] = verdict
+    if not verdict and key not in _block_accounting_logged:
+        _block_accounting_logged.add(key)
+        print(
+            f"10sorLabs launcher: {directory} reports allocated blocks derived from the "
+            f"file's length, so download progress cannot be measured there; the panel "
+            f"will show elapsed time instead."
+            if verdict is False
+            else f"10sorLabs launcher: could not establish block accounting in "
+            f"{directory}, so download progress will not be reported there.",
+            flush=True,
+        )
+    return bool(verdict)
+
+
+def written_bytes(path: Path) -> int | None:
+    """Bytes actually on disk, not the file's extent - or None when nobody can say.
 
     aria2c -s16 writes sixteen ranges at their own offsets, so the file is sparse and
     st_size reports the extent. st_blocks counts allocated blocks (512-byte units,
-    POSIX). This is a stat call - we still never parse aria2c's output. Windows has no
-    st_blocks; the extent is correct there because nothing on Windows runs a real
-    segmented download.
+    POSIX). This is a stat call - we still never parse aria2c's output.
+
+    None does not mean zero bytes. It means the filesystem under `path` derives st_blocks
+    from the file's length, so every number this could return would be the extent wearing
+    the block count's clothes. MooseFS does exactly that - mfs_fuse.c:1127,1135,1143
+    compute st_blocks as (attrlength+511)/512 - and because aria2c opens its sixteenth
+    connection at 15/16 of the file within the first second, the extent pins at 93.75%
+    immediately and the panel then climbs at one connection's rate instead of the
+    transfer's. It read 94% with 15% downloaded, and cost a day.
+
+    Guarding only for st_blocks being absent was not enough: on Linux getattr always
+    succeeds, so that arm is unreachable there and the meaningless value went straight
+    through. blocks_are_real() is the guard for it being present but derived.
+
+    Only the aria2c path calls this. The standard-tier downloader counts the bytes it
+    writes as it writes them (`current += len(chunk)`), so it is exact on every
+    filesystem and must not be "made consistent" with this - that would trade an accurate
+    counter for an indeterminate one.
     """
+    if not blocks_are_real(path.parent):
+        return None
     try:
         stat = path.stat()
     except OSError:
@@ -709,6 +942,58 @@ def file_sha256(path: Path, on_progress: Any = None) -> str:
     return digest.hexdigest()
 
 
+def copy_into_place(
+    source: Path,
+    destination: Path,
+    on_progress: Any = None,
+    check_cancelled: Any = None,
+) -> None:
+    """Copy a staged file onto the models volume, then rename it into position.
+
+    Runs on an asyncio.to_thread worker. Writes to a .placing sidecar and renames that at
+    the end: a crash part way through a 20 GB copy must never leave a truncated file at
+    the real path, because the "already exists" check at the top of _download_file would
+    then trust its length and skip the download for good.
+
+    The sidecar has to live beside the destination rather than in the scratch directory -
+    the rename is only atomic within one filesystem, and being on another device is the
+    whole reason this function exists.
+    """
+    size = source.stat().st_size
+    try:
+        free = shutil.disk_usage(destination.parent).free
+    except OSError:
+        free = None
+    if free is not None and free < size:
+        # Worth its own error: without this an ENOSPC would surface only here, after a
+        # complete and successful download, having spent every byte twice.
+        raise RuntimeError(
+            f"Not enough room to place {destination.name}: "
+            f"{human_bytes(size)} needed, {human_bytes(free)} free on "
+            f"{destination.parent}."
+        )
+
+    sidecar = destination.with_name(destination.name + ".placing")
+    copied = 0
+    try:
+        with source.open("rb") as reader, sidecar.open("wb") as writer:
+            for chunk in iter(lambda: reader.read(8 * 1024 * 1024), b""):
+                if check_cancelled is not None:
+                    # Raises InstallCancelled, which propagates out of the to_thread
+                    # worker to whoever is awaiting it. Without this a 20 GB placement is
+                    # a minute of a Cancel button that does nothing.
+                    check_cancelled()
+                writer.write(chunk)
+                copied += len(chunk)
+                if on_progress is not None:
+                    on_progress(copied)
+        os.replace(sidecar, destination)
+    finally:
+        # Covers the raise above and any error mid-copy. It does not cover SIGKILL or a
+        # pod stop, which is why sweep_scratch also clears *.placing from the models tree.
+        sidecar.unlink(missing_ok=True)
+
+
 def seed_hash_from_partial(digest: Any, path: Path, byte_count: int) -> None:
     """Fold the bytes already on disk into a running hash before a resume.
 
@@ -731,6 +1016,14 @@ def human_bytes(count: float) -> str:
             return f"{count:.2f} {unit}" if unit == "GB" else f"{count:.0f} {unit}"
         count /= 1024
     return f"{count:.2f} GB"
+
+
+def human_duration(seconds: float) -> str:
+    """'47s', '4m12s'. Short enough to sit inside a status message."""
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}m{total % 60:02d}s"
 
 
 def transfer_phrase(
@@ -1597,7 +1890,9 @@ class JobController:
                 link_seconds = time.monotonic() - link_started
                 verify_started = time.monotonic()
                 try:
-                    completed = await self._verify_and_place(
+                    # A twin is already on the volume and link_or_copy hardlinks it, so
+                    # this partial is destination-adjacent and the placement is a rename.
+                    completed, _ = await self._verify_and_place(
                         partial, destination, expected_size, expected_sha, name
                     )
                 except RuntimeError as exc:
@@ -1679,6 +1974,38 @@ class JobController:
             else ""
         )
 
+        # Download to container disk where writes are cheap, then place the finished file
+        # with one sequential copy. Measured on a pod, same URL and same binary: 460 MB/s
+        # to /root against 26 MB/s to /workspace, and 24 MB/s there on a single connection
+        # too - so this is the destination, not the number of writers. Applies to the
+        # httpx branch as well for that reason: one connection is what it already uses.
+        #
+        # Below the twin branch on purpose. A twin is already on the volume and
+        # link_or_copy hardlinks it, so routing that through scratch would turn a free
+        # hardlink into a full copy.
+        staged_partial = scratch_partial_for(destination, expected_size)
+        if staged_partial is not None:
+            root = staged_partial.parent
+            print(
+                f"10sorLabs launcher: {name}: staging on {root} "
+                f"({human_bytes(shutil.disk_usage(root).free)} free)",
+                flush=True,
+            )
+            partial = staged_partial
+        elif scratch_dir() is not None and expected_size > 0:
+            # Only the free-space branch is worth a line. No scratch device at all is a
+            # property of the pod, already logged once at resolution.
+            root = scratch_dir()
+            margin = max(2 * 1024**3, expected_size // 10)
+            print(
+                f"10sorLabs launcher: {name}: not staging - "
+                f"{human_bytes(shutil.disk_usage(root).free)} free on {root}, needs "
+                f"{human_bytes(expected_size)} + {human_bytes(margin)} margin. "
+                f"Expect ~25 MB/s to the network volume; a larger container disk is the "
+                f"fix.",
+                flush=True,
+            )
+
         # Bound in one branch each, read by the shared epilogue below.
         verified_externally = False
         inline_digest: str | None = None
@@ -1693,15 +2020,29 @@ class JobController:
                 partial.unlink(missing_ok=True)
             # Same units as the poller: a resumed .part is sparse, so measuring the
             # baseline as an extent here would make the first speed reading negative.
-            start_size = written_bytes(partial)
+            measured = written_bytes(partial)
+            if measured is None:
+                # This volume derives st_blocks from length, so there is no block count
+                # to baseline against. Take st_size instead - and note that the phrase
+                # below then subtracts one extent from another, which on a resume reports
+                # near zero rather than the whole file. That understates; using 0 here
+                # would report a resumed file's entire extent as fetched this session,
+                # and the line right below is what people read while debugging exactly
+                # this. Overstating it is the one thing it must not do.
+                start_size = partial.stat().st_size if partial.exists() else 0
+            else:
+                start_size = measured
 
             self.update(
                 stage="downloading",
                 message=f"Downloading {name}…",
                 current_file=name,
                 file_index=index + 1,
-                file_downloaded_bytes=start_size,
-                file_total_bytes=expected_size,
+                # Zeroed when the volume cannot be measured, so the panel does not flash
+                # a resumed file's extent as though it were progress before the first
+                # poll tick corrects it. app.js hides the byte line when both are 0.
+                file_downloaded_bytes=0 if measured is None else start_size,
+                file_total_bytes=0 if measured is None else expected_size,
             )
             fetch_started = time.monotonic()
             verified_externally = await self._download_with_aria2c(
@@ -1719,8 +2060,14 @@ class JobController:
             )
             fetch_seconds = time.monotonic() - fetch_started
             # Same units as start_size, so a resumed file reports only the new bytes.
+            fetched = written_bytes(partial)
+            if fetched is None:
+                # Both ends of the subtraction from st_size, per start_size above. A
+                # finished file's extent is exactly its length on any filesystem, so on
+                # the common case - a download that did not resume - this is exact.
+                fetched = partial.stat().st_size if partial.exists() else 0
             fetch_phrase = transfer_phrase(
-                "aria2c", max(0, written_bytes(partial) - start_size), fetch_seconds
+                "aria2c", max(0, fetched - start_size), fetch_seconds
             )
         else:
             control = partial.with_name(partial.name + ".aria2")
@@ -1823,7 +2170,7 @@ class JobController:
             )
 
         verify_started = time.monotonic()
-        completed = await self._verify_and_place(
+        completed, place_seconds = await self._verify_and_place(
             partial,
             destination,
             expected_size,
@@ -1832,7 +2179,9 @@ class JobController:
             digest=None if use_aria2 else inline_digest,
             verified_externally=verified_externally,
         )
-        verify_seconds = time.monotonic() - verify_started
+        # The placement copy is inside the same window, so take it back out or the
+        # verification figure absorbs it and the split stops meaning anything.
+        verify_seconds = time.monotonic() - verify_started - place_seconds
 
         phases = [fetch_phrase]
         if verified_externally:
@@ -1845,6 +2194,11 @@ class JobController:
             # aria2c refused --checksum, so this fell back to a second pass. That is
             # the case the timing split is here to make visible.
             phases.append(transfer_phrase("verified", completed, verify_seconds))
+        if place_seconds:
+            # The whole justification for staging is that this number is large. Print it
+            # on its own: if it comes back near the volume's own ~25 MB/s, staging bought
+            # nothing and this change should be reverted rather than tuned.
+            phases.append(transfer_phrase("placed", completed, place_seconds))
         self._log_file_timing(
             name, source_url, phases, time.monotonic() - file_started
         )
@@ -1923,6 +2277,32 @@ class JobController:
 
         return report
 
+    def _place_progress(self, name: str, total: int) -> Any:
+        """The same idea as _hash_progress, for the copy onto the models volume.
+
+        A staged file has to be copied across devices, and at 540 MB/s that is twelve
+        seconds of silence on a 6 GB file and a minute on a 20 GB one. Leaving the panel
+        frozen through it is the mistake already made once with the checksum pass.
+        """
+        last = 0.0
+        rate = RateWindow()
+
+        def report(done: int) -> None:
+            nonlocal last
+            now = time.monotonic()
+            if now - last < 0.25:
+                return
+            last = now
+            percent = (done / total * 100) if total else 0
+            self.update(
+                stage="installing",
+                message=f"Placing {name}… {percent:.0f}%",
+                file_downloaded_bytes=done,
+                bytes_per_second=rate.add(now, done),
+            )
+
+        return report
+
     async def _verify_and_place(
         self,
         partial: Path,
@@ -1932,8 +2312,11 @@ class JobController:
         name: str,
         digest: str | None = None,
         verified_externally: bool = False,
-    ) -> int:
-        """Size, checksum, move. Shared by the download and link paths alike.
+    ) -> tuple[int, float]:
+        """Size, checksum, place. Shared by the download and link paths alike.
+
+        Returns (byte count, placement seconds). The second element is only non-zero when
+        the file had to be copied across devices; callers use the first as the size.
 
         The checksum can arrive three ways: already confirmed by aria2c as it wrote,
         supplied as a digest computed from the bytes as they streamed past, or - for a
@@ -1961,8 +2344,31 @@ class JobController:
                     f"Checksum verification failed for {name}; the .part file was retained."
                 )
 
-        os.replace(partial, destination)
-        return destination.stat().st_size
+        place_seconds = 0.0
+        try:
+            os.replace(partial, destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Staged on container disk, so the rename cannot cross to the models volume.
+            # Copy it, and time that separately: it is the one operation this design adds
+            # and the only measurement that can tell us whether staging was worth it.
+            self.update(
+                stage="installing",
+                message=f"Placing {name}…",
+                bytes_per_second=0,
+            )
+            place_started = time.monotonic()
+            await asyncio.to_thread(
+                copy_into_place,
+                partial,
+                destination,
+                self._place_progress(name, expected_size or partial.stat().st_size),
+                self.check_cancelled,
+            )
+            place_seconds = time.monotonic() - place_started
+            partial.unlink(missing_ok=True)
+        return destination.stat().st_size, place_seconds
 
     async def _download_with_aria2c(
         self,
@@ -2012,6 +2418,32 @@ class JobController:
                 # Returns 0 until aria2c creates the file; the monotonic guard below
                 # holds the reading at start_size rather than dropping it to zero.
                 current = written_bytes(partial)
+
+                if current is None:
+                    # This filesystem derives st_blocks from the file's length, so there
+                    # is no honest number to publish - see written_bytes. A precise-
+                    # looking wrong one is worse than none: the fabricated 94% cost a
+                    # day. Zeros hide the byte line and the rate in app.js, the file
+                    # counter survives, and percent stays on the file boundary rather
+                    # than advancing on an extent.
+                    #
+                    # The elapsed time is what keeps this from reading as hung, which is
+                    # the failure this whole investigation started from. It is the one
+                    # number here that cannot lie, and on a 63 GB workflow it is the
+                    # difference between a panel that is quiet and a panel that is dead.
+                    self.update(
+                        message=(
+                            f"Downloading {name}… "
+                            f"{human_duration(time.monotonic() - started)} "
+                            f"(progress not measurable on this volume)"
+                        ),
+                        file_downloaded_bytes=0,
+                        file_total_bytes=0,
+                        bytes_per_second=0,
+                        percent=(index / max(file_count, 1)) * download_ceiling,
+                    )
+                    continue
+
                 if expected_size:
                     # Whole-block rounding can overshoot the byte count near the end.
                     # Cap before the max, or one over-rounded tick would pin `highest`
@@ -2100,6 +2532,16 @@ class JobController:
         waiter = asyncio.create_task(process.communicate())
         canceller = asyncio.create_task(self.cancel_event.wait())
         try:
+            # No timeout here on purpose, and it is a known gap: a genuinely hung aria2c
+            # sits in this wait until someone presses Cancel.
+            #
+            # --lowest-speed-limit was the obvious fix and was deliberately not taken.
+            # The reason downloads to the network volume are slow is not yet established,
+            # and if it turns out to be a per-connection cap, every connection sitting
+            # near the 869-870 KB/s the panel has recorded would trip the flag - turning
+            # a slow install into an abort-and-retry loop, on the staged path too. A
+            # speed floor cannot be chosen before the floor's cause is known. Adding a
+            # timeout of our own instead is a separate decision, not a smaller one.
             await asyncio.wait(
                 {waiter, canceller},
                 return_when=asyncio.FIRST_COMPLETED,
@@ -2332,11 +2774,35 @@ comfy_service_controller = ComfyServiceController()
 controller = JobController()
 custom_model_controller = CustomModelController()
 custom_node_controller = CustomNodeController()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Boot-time housekeeping. Deliberately not module level.
+
+    Anything at module scope runs on `import launcher.app`, which happens on a developer
+    machine, in CI, and at pytest collection. Sweeping the filesystem as a side effect of
+    an import is the kind of thing that is only noticed once it deletes something.
+    """
+    where = scratch_dir()
+    print(
+        f"10sorLabs launcher: staging downloads on {where}"
+        if where is not None
+        else "10sorLabs launcher: no separate scratch device; "
+        "downloads are written beside their destination.",
+        flush=True,
+    )
+    # to_thread so a slow models tree cannot hold up the port binding.
+    await asyncio.to_thread(sweep_scratch)
+    yield
+
+
 app = FastAPI(
     title="10sorLabs Model Grabber",
     version="1.1.0",
     docs_url=None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 
