@@ -1041,6 +1041,39 @@ def transfer_phrase(
     )
 
 
+_NETWORK_FAILURE_MARKERS = (
+    "read timed out",
+    "connection",
+    "name resolution",
+    "network is unreachable",
+    "max retries exceeded",
+)
+
+_MISSING_BACKEND_MARKERS = (
+    "no module named",
+    "modulenotfounderror",
+    "cmake must be installed",
+    "cmake is not installed",
+)
+
+
+def needs_build_isolation(output: str) -> bool:
+    """True when a --no-build-isolation build failed for want of a build backend.
+
+    Deliberately narrow, and network failures are checked first and win. A retry with
+    isolation restored re-downloads torch and the nvidia stack - on a slow pod that is
+    hours - so a false positive here recreates the 46-minute hang this whole change
+    exists to remove. When the output is ambiguous, the answer is False.
+
+    A slow index is not a missing backend, and a compile error, a version conflict and a
+    404 are all real failures that a second attempt would only make slower.
+    """
+    lowered = output.lower()
+    if any(marker in lowered for marker in _NETWORK_FAILURE_MARKERS):
+        return False
+    return any(marker in lowered for marker in _MISSING_BACKEND_MARKERS)
+
+
 def rejects_checksum_option(output: str) -> bool:
     """True when aria2c refused the --checksum option itself.
 
@@ -1440,15 +1473,41 @@ class CustomNodeController:
                 python = COMFYUI_VENV / "bin" / "python"
                 if not python.exists():
                     python = Path(sys.executable)
+                # Same three flags as the workflow installer, for the same reason: this
+                # tab installs the same node packs. See _install_custom_node.
                 returncode, output = await self._run_process(
                     python,
                     "-m",
                     "pip",
                     "install",
+                    "--no-build-isolation",
+                    "--timeout",
+                    "15",
+                    "--retries",
+                    "3",
                     "-r",
                     requirements,
                     timeout=1800,
                 )
+                if returncode and needs_build_isolation(output):
+                    print(
+                        f"10sorLabs launcher: {item.name}: build backend missing; "
+                        f"retrying with build isolation.",
+                        flush=True,
+                    )
+                    returncode, output = await self._run_process(
+                        python,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--timeout",
+                        "15",
+                        "--retries",
+                        "3",
+                        "-r",
+                        requirements,
+                        timeout=1800,
+                    )
                 if returncode:
                     raise RuntimeError(
                         f"Custom node requirements failed: {output[-500:]}"
@@ -1786,11 +1845,18 @@ class JobController:
             message="Installing the latest ComfyUI requirements…",
             bytes_per_second=0,
         )
+        # No --no-build-isolation here. ComfyUI's own requirements are all wheels, there
+        # is no measured problem on this path, and an unmeasured change is how this class
+        # of bug starts. The two network flags carry no such risk and are worth having.
         returncode, output = await self._run_process(
             python,
             "-m",
             "pip",
             "install",
+            "--timeout",
+            "15",
+            "--retries",
+            "3",
             "-r",
             requirements,
             timeout=1800,
@@ -2807,10 +2873,51 @@ class JobController:
                 "-m",
                 "pip",
                 "install",
+                # ComfyUI-Impact-Pack's requirements.txt ends with
+                # git+https://github.com/facebookresearch/sam2. A VCS requirement has no
+                # wheel, so pip runs a PEP 517 build, and build isolation is
+                # --ignore-installed by definition: sam2's pyproject.toml asks for
+                # setuptools>=61 and torch>=2.5.1, so pip downloaded a second complete
+                # torch plus the whole nvidia CUDA stack into a temp overlay to read one
+                # package's metadata - while the pod's own torch sat installed. At the
+                # 87-142 KB/s that pod measured against PyPI, 3 GB is about seven hours.
+                #
+                # Building against what is already installed instead: 264 kB, seconds,
+                # and the native extension still built. Measured on that same pod.
+                "--no-build-isolation",
+                # The venv has include-system-site-packages = true - confirmed on the pod
+                # by pip resolving torch out of /usr/local/lib/python3.12/dist-packages
+                # from inside it - so the image's preinstalled packages are visible here.
+                "--timeout",
+                "15",
+                "--retries",
+                "3",
                 "-r",
                 requirements,
                 timeout=1800,
             )
+            if returncode and needs_build_isolation(output):
+                # A package whose build backend genuinely is not installed. This costs
+                # the multi-gigabyte download the flag above exists to avoid, which is
+                # why needs_build_isolation refuses to guess.
+                print(
+                    f"10sorLabs launcher: {name}: build backend missing; "
+                    f"retrying with build isolation.",
+                    flush=True,
+                )
+                returncode, output = await self._run_process(
+                    pip,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--timeout",
+                    "15",
+                    "--retries",
+                    "3",
+                    "-r",
+                    requirements,
+                    timeout=1800,
+                )
             if returncode:
                 raise RuntimeError(
                     f"Dependencies failed for {name}: {output[-500:]}"

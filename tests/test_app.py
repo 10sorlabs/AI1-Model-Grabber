@@ -1102,6 +1102,13 @@ def test_comfyui_update_uses_official_master_and_runtime_python(
             "-m",
             "pip",
             "install",
+            # No --no-build-isolation on this path: ComfyUI's own requirements are all
+            # wheels and nothing here was ever measured as slow. See the custom-node
+            # install for the path where it matters.
+            "--timeout",
+            "15",
+            "--retries",
+            "3",
             "-r",
             str(comfy_dir / "requirements.txt"),
         ),
@@ -4186,3 +4193,199 @@ def test_every_subprocess_the_custom_nodes_tab_starts_is_bounded(
     recorded.clear()
     asyncio.run(controller._origin_url(custom_nodes / "Example-Node"))
     assert recorded and recorded[0][1] == {"timeout": 60}
+
+
+def test_a_missing_build_backend_is_worth_a_retry() -> None:
+    """The only thing that earns a second, expensive attempt: no backend to build with."""
+    assert launcher_app.needs_build_isolation(
+        "ModuleNotFoundError: No module named 'setuptools'"
+    )
+    assert launcher_app.needs_build_isolation("No module named 'cmake'")
+    assert launcher_app.needs_build_isolation(
+        "CMake must be installed to build the following extensions: dlib"
+    )
+    assert launcher_app.needs_build_isolation(
+        "  Traceback (most recent call last):\n"
+        "    File \"/tmp/pip-build-env/overlay/setup.py\", line 3, in <module>\n"
+        "      import setuptools\n"
+        "  ModuleNotFoundError: No module named 'setuptools'\n"
+        "  [end of output]\n"
+    )
+
+
+def test_a_slow_index_or_a_real_error_never_earns_a_retry() -> None:
+    """The retry costs the multi-gigabyte download --no-build-isolation exists to avoid.
+
+    So a false positive here recreates the 46-minute hang. Anything ambiguous is False.
+    """
+    # Network: a retry doubles the wait on a pod already measured at 87-142 KB/s.
+    assert not launcher_app.needs_build_isolation(
+        "pip._vendor.urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool"
+        "(host='pypi.org', port=443): Read timed out."
+    )
+    assert not launcher_app.needs_build_isolation(
+        "ConnectionResetError(104, 'Connection reset by peer')"
+    )
+    assert not launcher_app.needs_build_isolation(
+        "Failed to establish a new connection: [Errno -3] "
+        "Temporary failure in name resolution"
+    )
+    # A genuine build failure: the backend was there, the compile was not.
+    assert not launcher_app.needs_build_isolation(
+        "error: command '/usr/bin/g++' failed with exit code 1"
+    )
+    # A resolver conflict, which a second attempt cannot fix either.
+    assert not launcher_app.needs_build_isolation(
+        "ERROR: Cannot install torch==2.5.1 and torchvision==0.20 because these "
+        "package versions have conflicting dependencies."
+    )
+
+
+def test_a_network_failure_wins_even_when_it_mentions_a_module() -> None:
+    """Rule 1 before rule 2, because the expensive mistake is the retry."""
+    assert not launcher_app.needs_build_isolation(
+        "WARNING: Retrying after connection broken by ReadTimeoutError; "
+        "ModuleNotFoundError: No module named 'setuptools'"
+    )
+
+
+def custom_node_pip_argv(tmp_path, monkeypatch, outputs):
+    """Drive _install_custom_node's dependency step and return every pip argv it ran.
+
+    `outputs` is one (returncode, output) per pip attempt, so a test can make the first
+    one fail the way a real pod failed. No pip is launched.
+    """
+    custom_nodes = tmp_path / "custom_nodes"
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+    controller = launcher_app.JobController()
+    pip_runs: list[tuple[str, ...]] = []
+    answers = list(outputs)
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if "pip" in normalized:
+            pip_runs.append(normalized)
+            return answers.pop(0)
+        if "remote" in normalized and "get-url" in normalized:
+            return 0, "https://github.com/ltdrdata/ComfyUI-Impact-Pack\n"
+        if "clone" in normalized:
+            destination = Path(normalized[-1])
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "requirements.txt").write_text(
+                "git+https://github.com/facebookresearch/sam2\n", encoding="utf-8"
+            )
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    node = {
+        "name": "ComfyUI-Impact-Pack",
+        "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        "ref": "a" * 40,
+        "install_requirements": True,
+    }
+    failure = None
+    try:
+        asyncio.run(controller._install_custom_node(node))
+    except RuntimeError as exc:
+        failure = exc
+    return pip_runs, failure
+
+
+def test_the_custom_node_pip_builds_against_what_is_already_installed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The argv is the fix. Asserted here rather than by launching a real pip."""
+    pip_runs, failure = custom_node_pip_argv(tmp_path, monkeypatch, [(0, "")])
+
+    assert failure is None
+    assert len(pip_runs) == 1
+    argv = pip_runs[0]
+    assert "--no-build-isolation" in argv
+    assert argv[argv.index("--timeout") + 1] == "15"
+    assert argv[argv.index("--retries") + 1] == "3"
+    # Still installing from the file, not from a name list.
+    assert argv[-2] == "-r"
+
+
+def test_a_missing_backend_retries_once_with_isolation_restored(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The fallback that must exist, and must fire exactly once."""
+    pip_runs, failure = custom_node_pip_argv(
+        tmp_path,
+        monkeypatch,
+        [(1, "ModuleNotFoundError: No module named 'setuptools'"), (0, "")],
+    )
+
+    assert failure is None
+    assert len(pip_runs) == 2
+    assert "--no-build-isolation" in pip_runs[0]
+    assert "--no-build-isolation" not in pip_runs[1]
+    # The network flags stay on the retry - it is the slow attempt, not the fast one.
+    assert "--timeout" in pip_runs[1] and "--retries" in pip_runs[1]
+    # Never silent: this attempt is the expensive one.
+    assert "build backend missing" in capsys.readouterr().out
+
+
+def test_a_network_failure_does_not_retry_the_expensive_way(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Retrying a slow index with isolation restored is how the 46 minutes happened."""
+    pip_runs, failure = custom_node_pip_argv(
+        tmp_path,
+        monkeypatch,
+        [(1, "HTTPSConnectionPool(host='pypi.org', port=443): Read timed out.")],
+    )
+
+    assert len(pip_runs) == 1
+    assert failure is not None and "Read timed out" in str(failure)
+
+
+def test_the_custom_nodes_tab_pip_carries_the_same_flags(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Same node packs, same pip, same fix - the tab must not be the slow way in."""
+    comfy_dir = tmp_path / "ComfyUI"
+    custom_nodes = comfy_dir / "custom_nodes"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(launcher_app, "validate_custom_node_url", lambda url: url)
+
+    controller = launcher_app.CustomNodeController()
+    pip_runs: list[tuple[str, ...]] = []
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if "pip" in normalized:
+            pip_runs.append(normalized)
+            return 0, ""
+        if "clone" in normalized:
+            staging = Path(normalized[-1])
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "requirements.txt").write_text("pyyaml\n", encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    async def install():
+        created = await controller.enqueue("https://github.com/example/Example-Node")
+        if controller.worker_task:
+            await controller.worker_task
+        return controller.items[created["id"]]
+
+    item = asyncio.run(install())
+
+    assert item.status == "complete", item.error
+    assert len(pip_runs) == 1
+    assert "--no-build-isolation" in pip_runs[0]
+    assert pip_runs[0][pip_runs[0].index("--timeout") + 1] == "15"
+    assert pip_runs[0][pip_runs[0].index("--retries") + 1] == "3"
