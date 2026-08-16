@@ -1071,6 +1071,10 @@ def test_comfyui_update_uses_official_master_and_runtime_python(
     asyncio.run(controller._update_comfyui())
 
     assert commands == [
+        # The two probes. This fake answers "ok" to everything, which is not a sha, so the
+        # 40-hex guard refuses the shortcut and the full path below still runs.
+        ("git", "-C", str(comfy_dir), "rev-parse", "HEAD"),
+        ("git", "ls-remote", "https://github.com/Comfy-Org/ComfyUI.git", "master"),
         (
             "git",
             "-C",
@@ -1097,6 +1101,9 @@ def test_comfyui_update_uses_official_master_and_runtime_python(
             "--hard",
             "origin/master",
         ),
+        # HEAD after the reset. "ok" is not a sha either, so the pip install below is not
+        # skipped - only a pair of real, equal shas may skip it.
+        ("git", "-C", str(comfy_dir), "rev-parse", "HEAD"),
         (
             str(comfy_python),
             "-m",
@@ -4146,7 +4153,15 @@ def test_every_subprocess_the_workflow_installer_starts_is_bounded(
         timeout = bounds["timeout"]
         if "pip" in command:
             assert timeout == 1800
-        elif "cat-file" in command or ("remote" in command and "get-url" in command):
+        elif "ls-remote" in command:
+            # Shorter than the rest: GitHub answers in under two seconds, and a probe that
+            # times out costs only the shortcut.
+            assert timeout == 30
+        elif (
+            "cat-file" in command
+            or "rev-parse" in command
+            or ("remote" in command and "get-url" in command)
+        ):
             assert timeout == 60
         else:
             assert timeout == 600
@@ -4715,6 +4730,15 @@ def test_diagnostics_never_exports_a_url_or_a_path() -> None:
     )
     store.finish_file(record)
     store.record_node(name="ComfyUI-Impact-Pack", total_seconds=49.5)
+    # The update subtree too, with the shape git actually produces: a path in the middle
+    # of a sentence, which the "starts with a slash" half of this walk would never catch.
+    store.record_comfyui_update(
+        workflow_id="minimax-h3",
+        error=(
+            "ComfyUI update failed: fatal: not a git repository: "
+            "/workspace/runpod-slim/ComfyUI/.git, remote https://github.com/x/y.git"
+        ),
+    )
 
     def every_string(value):
         if isinstance(value, str):
@@ -4837,6 +4861,7 @@ def test_the_diagnostics_endpoint_answers_with_every_documented_key(
         "aria2c_supports_checksum",
         "staging_available",
         "in_flight",
+        "comfyui_update",
         "files",
         "nodes",
     }
@@ -5140,3 +5165,316 @@ def test_nothing_in_a_diagnostics_export_looks_like_a_path_or_a_url() -> None:
     assert "X-Amz-Signature" not in flattened
     assert "://" not in flattened
     assert "/workspace" not in flattened
+
+
+SHA_INSTALLED = "a" * 40
+SHA_UPSTREAM = "b" * 40
+
+
+def comfyui_update_harness(tmp_path, monkeypatch, heads, remote):
+    """Run _update_comfyui against a scripted git.
+
+    `heads` is one (returncode, output) per rev-parse, in order: the probe before the
+    fetch, then the one after the reset. `remote` is the single ls-remote answer. No git
+    runs. Returns (controller, recorded argv, recorded messages, recorded updates).
+    """
+    comfy_dir = tmp_path / "ComfyUI"
+    (comfy_dir / ".git").mkdir(parents=True)
+    (comfy_dir / "requirements.txt").write_text("torch\n", encoding="utf-8")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+
+    controller = launcher_app.JobController()
+    recorded: list[tuple[str, ...]] = []
+    messages: list[str] = []
+    updates: list[dict] = []
+    remaining = list(heads)
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        recorded.append(normalized)
+        if "rev-parse" in normalized:
+            return remaining.pop(0) if remaining else (1, "no more heads scripted")
+        if "ls-remote" in normalized:
+            return remote
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        updates.append(changes)
+        if "message" in changes:
+            messages.append(str(changes["message"]))
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+    return controller, recorded, messages, updates
+
+
+def ran(recorded, word: str) -> bool:
+    return any(word in command for command in recorded)
+
+
+def test_an_up_to_date_comfyui_is_not_fetched_reset_or_reinstalled(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The common case: the base image ships a current ComfyUI.
+
+    The pip install alone measures about two minutes on a pod, and MiniMax H3 runs this
+    before any download - which is why that panel sat at 0% doing nothing visible.
+    """
+    controller, recorded, messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n")],
+        remote=(0, f"{SHA_INSTALLED}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    assert len(recorded) == 2
+    assert "rev-parse" in recorded[0]
+    assert "ls-remote" in recorded[1]
+    assert not ran(recorded, "fetch")
+    assert not ran(recorded, "reset")
+    assert not ran(recorded, "pip")
+    assert controller.state.message == "ComfyUI is already up to date."
+
+
+def test_a_moved_master_still_runs_the_whole_update(tmp_path, monkeypatch) -> None:
+    """The shortcut is an optimisation. When it does not apply, nothing else changed."""
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_UPSTREAM + "\n")],
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    verbs = []
+    for command in recorded:
+        for word in ("rev-parse", "ls-remote", "set-url", "fetch", "reset", "pip"):
+            if word in command:
+                verbs.append(word)
+                break
+    # The existing order, with the two probes in front and one more rev-parse after the
+    # reset - which is the only new subprocess this change adds to a real update.
+    assert verbs == [
+        "rev-parse",
+        "ls-remote",
+        "set-url",
+        "fetch",
+        "reset",
+        "rev-parse",
+        "pip",
+    ]
+
+
+def test_a_failed_ls_remote_only_costs_the_shortcut(tmp_path, monkeypatch) -> None:
+    """A probe that cannot answer must never fail the install."""
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_UPSTREAM + "\n")],
+        remote=(128, "fatal: unable to access 'https://github.com/...': Could not resolve host"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    assert ran(recorded, "fetch")
+    assert ran(recorded, "reset")
+    assert ran(recorded, "pip")
+
+
+def test_a_failed_rev_parse_only_costs_the_shortcut(tmp_path, monkeypatch) -> None:
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(128, "fatal: ambiguous argument 'HEAD'"), (128, "fatal: again")],
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    assert ran(recorded, "fetch")
+    assert ran(recorded, "reset")
+    # No pair of real shas to compare, so the requirements install is not skipped either.
+    assert ran(recorded, "pip")
+
+
+def test_a_reset_that_moved_nothing_does_not_reinstall_requirements(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Same invariant as the shortcut, for when the shortcut could not be taken.
+
+    If HEAD did not move, the requirements did not change.
+    """
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_INSTALLED + "\n")],
+        # A differing remote, so the shortcut is refused and the reset actually runs.
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    assert ran(recorded, "fetch")
+    assert ran(recorded, "reset")
+    assert not ran(recorded, "pip")
+    assert controller.state.message == "ComfyUI was already at the latest version."
+
+
+def test_a_real_update_installs_requirements_with_the_network_flags(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """And still without --no-build-isolation: ComfyUI's requirements are all wheels."""
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_UPSTREAM + "\n")],
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui())
+
+    pip = next(command for command in recorded if "pip" in command)
+    assert pip[pip.index("--timeout") + 1] == "15"
+    assert pip[pip.index("--retries") + 1] == "3"
+    assert "--no-build-isolation" not in pip
+
+
+def test_no_update_ticker_outlives_the_update(tmp_path, monkeypatch) -> None:
+    """A surviving ticker overwrites whatever message is written next."""
+    controller, _recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n")],
+        remote=(0, f"{SHA_INSTALLED}\trefs/heads/master\n"),
+    )
+
+    async def returns_normally() -> int:
+        before = len(asyncio.all_tasks())
+        await controller._update_comfyui()
+        return len(asyncio.all_tasks()) - before
+
+    assert asyncio.run(returns_normally()) == 0
+    assert controller.state.message == "ComfyUI is already up to date."
+
+    # And when it raises. A .git that is not there is the method's own first check.
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "gone")
+    failing, _recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path / "second",
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_UPSTREAM + "\n")],
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+
+    async def raises() -> int:
+        before = len(asyncio.all_tasks())
+        monkeypatch.setattr(
+            failing,
+            "_run_process",
+            _explode_on("fetch", failing._run_process),
+        )
+        with pytest.raises(RuntimeError, match="ComfyUI update failed"):
+            await failing._update_comfyui()
+        return len(asyncio.all_tasks()) - before
+
+    assert asyncio.run(raises()) == 0
+
+
+def _explode_on(word, inner):
+    async def fake(*command, **bounds):
+        normalized = tuple(str(part) for part in command)
+        if word in normalized:
+            return 1, "fatal: could not fetch"
+        return await inner(*command, **bounds)
+
+    return fake
+
+
+def test_the_update_phase_zeroes_bytes_and_never_advances_percent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Zeroing is defensive here - start() already guarantees it - but percent is not.
+
+    percent stays at 0 for the whole phase on purpose: the download phase that follows
+    computes it from its own file counter, starting near zero, so any number claimed here
+    would be handed straight back. A bar that goes backwards is a bug this file already
+    guards against in the aria2c poller.
+    """
+    controller, _recorded, _messages, updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_UPSTREAM + "\n")],
+        remote=(0, f"{SHA_UPSTREAM}\trefs/heads/master\n"),
+    )
+    controller.state.file_downloaded_bytes = 375_083_008
+    controller.state.file_total_bytes = 375_083_008
+
+    asyncio.run(controller._update_comfyui())
+
+    assert controller.state.file_downloaded_bytes == 0
+    assert controller.state.file_total_bytes == 0
+    assert controller.state.percent == 0
+    assert [change["percent"] for change in updates if "percent" in change] == [0]
+
+
+def test_the_update_lands_in_diagnostics(tmp_path, monkeypatch) -> None:
+    """So the next time this is slow, nobody has to ask for a screenshot."""
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    assert store.export()["comfyui_update"] is None
+
+    controller, _recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n")],
+        remote=(0, f"{SHA_INSTALLED}\trefs/heads/master\n"),
+    )
+    controller.state.workflow_id = "minimax-h3"
+
+    asyncio.run(controller._update_comfyui())
+
+    record = store.export()["comfyui_update"]
+    assert record["skipped"] is True
+    assert record["reason"] == "already-up-to-date"
+    assert record["workflow_id"] == "minimax-h3"
+    assert record["requirements_seconds"] == 0.0
+    assert record["error"] is None
+
+
+def test_an_update_is_not_attributed_to_the_next_workflow(tmp_path, monkeypatch) -> None:
+    """State left over from a previous install, shown as if it were current, is the same
+    bug as the byte counter a node install used to inherit from a finished download."""
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    controller, _recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n")],
+        remote=(0, f"{SHA_INSTALLED}\trefs/heads/master\n"),
+    )
+
+    async def install_then_start_another():
+        await controller._update_comfyui()
+        assert store.export()["comfyui_update"] is not None
+
+        async def nothing(_workflow) -> None:
+            return None
+
+        monkeypatch.setattr(controller, "_run", nothing)
+        await controller.start({"id": "no-update", "title": "Workflow with no update"})
+        if controller.task:
+            await controller.task
+        return store.export()["comfyui_update"]
+
+    assert asyncio.run(install_then_start_another()) is None

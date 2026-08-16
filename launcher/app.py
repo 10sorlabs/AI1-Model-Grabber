@@ -43,6 +43,10 @@ COMFYUI_DIR = Path(
 CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
 COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstrip("/")
+# One spelling, used both to pin `origin` and to ask what master is. Two literals could
+# drift, and a drifted pair compares this pod against a different repository's master -
+# which either skips an update that was needed or never skips at all, silently.
+COMFYUI_UPSTREAM = "https://github.com/Comfy-Org/ComfyUI.git"
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
 # Resolved once; a file may only use the parallel downloader when this is present.
@@ -974,6 +978,8 @@ class Diagnostics:
     def __init__(self, history: int = 50) -> None:
         self.files: deque[dict[str, Any]] = deque(maxlen=history)
         self.nodes: deque[dict[str, Any]] = deque(maxlen=history)
+        # One per install rather than a rolling log, and cleared by JobController.start().
+        self.comfyui_update: dict[str, Any] | None = None
         self._in_flight: dict[str, Any] | None = None
         self._sampler: RateSampler | None = None
 
@@ -1050,6 +1056,45 @@ class Diagnostics:
             }
         )
 
+    def record_comfyui_update(
+        self,
+        *,
+        workflow_id: str | None = None,
+        skipped: bool = False,
+        reason: str | None = None,
+        fetch_seconds: float = 0.0,
+        reset_seconds: float = 0.0,
+        requirements_seconds: float = 0.0,
+        total_seconds: float = 0.0,
+        error: str | None = None,
+    ) -> None:
+        """The one ComfyUI update this install ran. Replaced, not appended.
+
+        Nothing in here can raise, and that is a requirement rather than an observation:
+        it is called from a finally that also runs on the failing path, so an exception of
+        its own would replace the real one and the user would be shown the wrong error.
+        Every value is a float this method rounds or a string the caller already produced
+        with str().
+
+        The error is scrubbed here rather than at the caller. git says things like
+        "fatal: not a git repository: /workspace/runpod-slim/ComfyUI/.git", and a path in
+        the middle of a sentence walks straight past the structural guard on this export,
+        which only refuses strings that start with a slash.
+
+        workflow_id is belt-and-braces against misattribution: start() clears this field
+        per install, and if some future path forgets to, the record still says whose it is.
+        """
+        self.comfyui_update = {
+            "workflow_id": workflow_id,
+            "skipped": skipped,
+            "reason": reason,
+            "fetch_seconds": round(fetch_seconds, 1),
+            "reset_seconds": round(reset_seconds, 1),
+            "requirements_seconds": round(requirements_seconds, 1),
+            "total_seconds": round(total_seconds, 1),
+            "error": redacted_for_export(str(error)) if error else None,
+        }
+
     def export(self) -> dict[str, Any]:
         in_flight = None
         if self._in_flight is not None:
@@ -1067,6 +1112,7 @@ class Diagnostics:
             # progress_measurable already carries that answer for free.
             "staging_available": scratch_dir() is not None,
             "in_flight": in_flight,
+            "comfyui_update": self.comfyui_update,
             "files": list(self.files),
             "nodes": list(self.nodes),
         }
@@ -1193,6 +1239,16 @@ _URL_IN_OUTPUT = re.compile(r"\b(https?)://([^\s/]+)(\S*)")
 # aria2c's own arithmetic intact: the slash in "12GiB/28GiB(42%)" follows a word
 # character, and the slash in a path does not.
 _PATH_IN_OUTPUT = re.compile(r"(?<!\w)/\S+")
+# A commit sha and nothing else. An empty or garbage answer from git must never compare
+# equal to another empty one and skip a real update.
+# Reached only through .fullmatch - never .match or .search, which would accept a 40-hex
+# run inside a longer string and defeat the point.
+_ONLY_A_SHA = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+
+
+def redacted_for_export(text: str) -> str:
+    """URLs and absolute paths out of a string bound for /api/diagnostics."""
+    return _PATH_IN_OUTPUT.sub("[path]", _URL_IN_OUTPUT.sub(r"\2/[redacted]", text))
 
 
 def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
@@ -1215,7 +1271,7 @@ def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
     a rule with exceptions in it.
     """
     kept = [
-        _PATH_IN_OUTPUT.sub("[path]", _URL_IN_OUTPUT.sub(r"\2/[redacted]", line)).strip()
+        redacted_for_export(line).strip()
         for line in output.splitlines()
         if "DL:" in line or "WARN" in line or "ERROR" in line
     ]
@@ -1848,6 +1904,12 @@ class JobController:
 
             self.shared_destinations = shared or {}
             self.cancel_event = asyncio.Event()
+            # A per-install fact, so it resets with the rest of them. files and nodes keep
+            # accumulating on purpose - they are a log - but an update left standing would
+            # be read as belonging to whichever workflow ran next, which is the same class
+            # of bug as the byte counter a node install used to inherit from a finished
+            # download.
+            diagnostics.comfyui_update = None
             self.state = JobState(
                 status="running",
                 workflow_id=workflow["id"],
@@ -1978,7 +2040,54 @@ class JobController:
             )
             await asyncio.sleep(1)
 
+    async def _git_head_sha(self) -> str:
+        """The commit ComfyUI is checked out at, or "" if that cannot be established.
+
+        RuntimeError only, and deliberately never a bare Exception: _run_process is about
+        to gain an InstallCancelled for a cancel pressed mid-command, and swallowing that
+        here would return "" and let the install carry on as though nobody had pressed
+        anything. That bug would be invisible until the day it lands.
+        """
+        try:
+            returncode, output = await self._run_process(
+                "git", "-C", COMFYUI_DIR, "rev-parse", "HEAD", timeout=60
+            )
+        except RuntimeError:
+            return ""
+        if returncode:
+            return ""
+        # Lowered rather than relying on git emitting lowercase: a comparison that depends
+        # on that without saying so is a comment waiting to be wrong.
+        candidate = output.strip().lower()
+        return candidate if _ONLY_A_SHA.fullmatch(candidate) else ""
+
+    async def _remote_master_sha(self) -> str:
+        """What master is at upstream, or "" if that cannot be established.
+
+        Asks COMFYUI_UPSTREAM directly and never consults `origin`, which is what makes
+        this answer correct whatever a pod's remote happens to be pointed at - and what
+        lets it run before the set-url below.
+
+        30s rather than the 600 the real git commands get: GitHub answers this in under
+        two seconds, and on a pod with no network a shorter wait reaches the fetch's real
+        error sooner. Timing out here costs nothing but the shortcut.
+        """
+        try:
+            returncode, output = await self._run_process(
+                "git", "ls-remote", COMFYUI_UPSTREAM, "master", timeout=30
+            )
+        except RuntimeError:
+            return ""
+        if returncode:
+            return ""
+        lines = output.strip().splitlines()
+        candidate = lines[0].split("\t", 1)[0].strip().lower() if lines else ""
+        return candidate if _ONLY_A_SHA.fullmatch(candidate) else ""
+
     async def _update_comfyui(self) -> None:
+        # First, above the probes. rev-parse on a missing repository fails, _git_head_sha
+        # swallows that into "", and the user would get a confusing downstream failure
+        # instead of this accurate one.
         git_directory = COMFYUI_DIR / ".git"
         requirements = COMFYUI_DIR / "requirements.txt"
         if not git_directory.is_dir():
@@ -1986,64 +2095,214 @@ class JobController:
                 "ComfyUI cannot be updated because its Git repository was not found."
             )
 
-        commands: list[tuple[str, tuple[str | Path, ...]]] = [
-            (
-                "Configuring the official ComfyUI repository…",
-                (
-                    "git",
-                    "-C",
-                    COMFYUI_DIR,
-                    "remote",
-                    "set-url",
-                    "origin",
-                    "https://github.com/Comfy-Org/ComfyUI.git",
-                ),
-            ),
-            (
-                "Downloading the latest ComfyUI version…",
-                ("git", "-C", COMFYUI_DIR, "fetch", "--prune", "origin", "master"),
-            ),
-            (
-                "Installing the latest ComfyUI version…",
-                ("git", "-C", COMFYUI_DIR, "reset", "--hard", "origin/master"),
-            ),
-        ]
-        for message, command in commands:
+        started = time.monotonic()
+        phase = {"text": "checking the installed version"}
+        fetch_seconds = 0.0
+        reset_seconds = 0.0
+        requirements_seconds = 0.0
+        skipped = False
+        reason: str | None = None
+        error: str | None = None
+        finished_message = "ComfyUI is up to date."
+
+        def rendered() -> str:
+            return (
+                f"Updating ComfyUI — {phase['text']}, "
+                f"{human_duration(time.monotonic() - started)}"
+            )
+
+        def step(phrase: str) -> None:
+            phase["text"] = phrase
+            self.update(message=rendered())
+
+        self.update(
+            stage="updating",
+            message=rendered(),
+            bytes_per_second=0,
+            # Set once and never advanced anywhere in this method. The download phase that
+            # follows computes percent from its own file counter, which starts near zero,
+            # so any number claimed here would be handed straight back - and a bar that
+            # goes backwards is a bug this file already guards against in the aria2c
+            # poller. The elapsed clock in the message does the liveness work instead.
+            percent=0,
+            # Defensive, not a repair: start() builds a fresh JobState and both fields
+            # default to 0, so nothing can reach this phase from a previous install. The
+            # node phase needed its own zeroing for a real reason - it inherits a finished
+            # download's totals through the same JobState, within one install. There is no
+            # such path into here.
+            file_downloaded_bytes=0,
+            file_total_bytes=0,
+        )
+
+        async def tick() -> None:
+            while True:
+                await asyncio.sleep(1)
+                self.update(message=rendered())
+
+        ticker = asyncio.create_task(tick())
+        try:
+            # One local call and one network round trip, both under a second in the normal
+            # case. If master has not moved past what this pod already has, the fetch, the
+            # reset and the pip install are all work with no output - and the pip install
+            # alone measures about two minutes on a pod. Compared against the remote rather
+            # than assumed: the base image's ComfyUI is usually current, but "usually" is
+            # not something to build a skip on.
+            #
+            # Skipping pip is safe here, and only here. ComfyUI's requirements.txt can only
+            # change when its commit changes, so if HEAD has not moved then the
+            # requirements installed for that HEAD - by the base image - are still the
+            # right ones. Do not restore an unconditional pip call without moving that
+            # invariant with it.
             self.check_cancelled()
-            self.update(stage="updating", message=message, bytes_per_second=0)
-            returncode, output = await self._run_process(*command, timeout=600)
+            head_before = await self._git_head_sha()
+            step("checking for a newer version")
+            self.check_cancelled()
+            remote_head = await self._remote_master_sha()
+            if head_before and remote_head and head_before == remote_head:
+                # Returns before set-url, so a pod whose origin points at a fork keeps that
+                # configuration. Deliberate and harmless: _remote_master_sha asks upstream
+                # directly and never reads origin, so this comparison is correct whatever
+                # origin says. Hoisting set-url above this check gives the whole saving
+                # back for nothing.
+                skipped = True
+                reason = "already-up-to-date"
+                finished_message = "ComfyUI is already up to date."
+                return
+
+            self.check_cancelled()
+            step("configuring the official repository")
+            returncode, output = await self._run_process(
+                "git",
+                "-C",
+                COMFYUI_DIR,
+                "remote",
+                "set-url",
+                "origin",
+                COMFYUI_UPSTREAM,
+                timeout=600,
+            )
             if returncode:
                 raise RuntimeError(f"ComfyUI update failed: {output[-500:]}")
 
-        if not requirements.is_file():
-            raise RuntimeError("ComfyUI requirements.txt was not found after the update.")
+            # fetch and reset are run and timed one at a time rather than through a generic
+            # loop: the diagnostics record reports them separately, and a loop has nothing
+            # to attribute a duration to. set-url is not timed - it is instant and local.
+            self.check_cancelled()
+            step("downloading the latest version")
+            fetch_started = time.monotonic()
+            returncode, output = await self._run_process(
+                "git",
+                "-C",
+                COMFYUI_DIR,
+                "fetch",
+                "--prune",
+                "origin",
+                "master",
+                timeout=600,
+            )
+            fetch_seconds = time.monotonic() - fetch_started
+            if returncode:
+                raise RuntimeError(f"ComfyUI update failed: {output[-500:]}")
 
-        python = COMFYUI_VENV / "bin" / "python"
-        if not python.exists():
-            python = Path(sys.executable)
-        self.update(
-            stage="updating",
-            message="Installing the latest ComfyUI requirements…",
-            bytes_per_second=0,
-        )
-        # No --no-build-isolation here. ComfyUI's own requirements are all wheels, there
-        # is no measured problem on this path, and an unmeasured change is how this class
-        # of bug starts. The two network flags carry no such risk and are worth having.
-        returncode, output = await self._run_process(
-            python,
-            "-m",
-            "pip",
-            "install",
-            "--timeout",
-            "15",
-            "--retries",
-            "3",
-            "-r",
-            requirements,
-            timeout=1800,
-        )
-        if returncode:
-            raise RuntimeError(f"ComfyUI requirements failed: {output[-500:]}")
+            self.check_cancelled()
+            step("installing the latest version")
+            reset_started = time.monotonic()
+            returncode, output = await self._run_process(
+                "git",
+                "-C",
+                COMFYUI_DIR,
+                "reset",
+                "--hard",
+                "origin/master",
+                timeout=600,
+            )
+            reset_seconds = time.monotonic() - reset_started
+            if returncode:
+                raise RuntimeError(f"ComfyUI update failed: {output[-500:]}")
+
+            if not requirements.is_file():
+                raise RuntimeError(
+                    "ComfyUI requirements.txt was not found after the update."
+                )
+
+            self.check_cancelled()
+            head_after = await self._git_head_sha()
+            if head_before and head_after and head_before == head_after:
+                # The same invariant as the shortcut above, for the case where it could not
+                # be taken - a failed ls-remote, say. The reset moved nothing, so the
+                # requirements for this commit are already the ones installed.
+                skipped = True
+                reason = "head-unchanged"
+                finished_message = "ComfyUI was already at the latest version."
+                return
+
+            step("installing requirements")
+            python = COMFYUI_VENV / "bin" / "python"
+            if not python.exists():
+                python = Path(sys.executable)
+            # No --no-build-isolation here. ComfyUI's own requirements are all wheels, there
+            # is no measured problem on this path, and an unmeasured change is how this class
+            # of bug starts. The two network flags carry no such risk and are worth having.
+            requirements_started = time.monotonic()
+            returncode, output = await self._run_process(
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--timeout",
+                "15",
+                "--retries",
+                "3",
+                "-r",
+                requirements,
+                timeout=1800,
+            )
+            requirements_seconds = time.monotonic() - requirements_started
+            if returncode:
+                raise RuntimeError(f"ComfyUI requirements failed: {output[-500:]}")
+        except Exception as exc:
+            error = str(exc)
+            raise
+        finally:
+            # Ticker first, then the record, then the message. A tick that fired after the
+            # message would overwrite it, and the record has to be taken on the raising
+            # path too - which is why record_comfyui_update cannot itself raise.
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+            total_seconds = time.monotonic() - started
+            diagnostics.record_comfyui_update(
+                workflow_id=self.state.workflow_id,
+                skipped=skipped,
+                reason=reason,
+                fetch_seconds=fetch_seconds,
+                reset_seconds=reset_seconds,
+                requirements_seconds=requirements_seconds,
+                total_seconds=total_seconds,
+                error=error,
+            )
+            phases = []
+            if reason == "already-up-to-date":
+                phases.append("already up to date; nothing fetched, reset or installed")
+            elif reason == "head-unchanged":
+                phases.append("reset moved nothing; requirements install skipped")
+            if fetch_seconds:
+                phases.append(f"fetched in {fetch_seconds:.1f}s")
+            if reset_seconds:
+                phases.append(f"reset in {reset_seconds:.1f}s")
+            if requirements_seconds:
+                phases.append(f"requirements in {requirements_seconds:.1f}s")
+            if error is not None:
+                phases.append("failed")
+            print(
+                "10sorLabs launcher: ComfyUI update: "
+                + "".join(f"{phrase}, " for phrase in phases)
+                + f"total {total_seconds:.1f}s",
+                flush=True,
+            )
+            if error is None:
+                self.update(
+                    stage="updating", message=finished_message, bytes_per_second=0
+                )
 
     async def _install_workflow(self, workflow: dict[str, Any]) -> None:
         await self._wait_for_comfyui()
