@@ -1189,6 +1189,10 @@ def transfer_phrase(
 
 
 _URL_IN_OUTPUT = re.compile(r"\b(https?)://([^\s/]+)(\S*)")
+# A whitespace-delimited token that begins with a slash. The lookbehind is what keeps
+# aria2c's own arithmetic intact: the slash in "12GiB/28GiB(42%)" follows a word
+# character, and the slash in a path does not.
+_PATH_IN_OUTPUT = re.compile(r"(?<!\w)/\S+")
 
 
 def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
@@ -1205,9 +1209,13 @@ def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
     that is only worth having if nothing is allowed to look like an exception. The host
     is the part with diagnostic value - a WARN naming a host the record does not is a
     redirect, and that is worth seeing. The scheme never told anyone anything.
+
+    Absolute paths go too. aria2c's file-listing summary is dropped by the filter below,
+    but a WARN can name the file it could not open, and "no paths in the export" is not
+    a rule with exceptions in it.
     """
     kept = [
-        _URL_IN_OUTPUT.sub(r"\2/[redacted]", line).strip()
+        _PATH_IN_OUTPUT.sub("[path]", _URL_IN_OUTPUT.sub(r"\2/[redacted]", line)).strip()
         for line in output.splitlines()
         if "DL:" in line or "WARN" in line or "ERROR" in line
     ]

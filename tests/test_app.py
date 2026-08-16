@@ -5093,3 +5093,50 @@ def test_the_audit_walks_each_pinned_pack_once() -> None:
     assert len(packs) == len({(node["repo"], node["ref"]) for node in listed})
     # Every pack is pinned to a sha, which is what makes this audit reproducible.
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for _name, _repo, ref in packs)
+
+
+def test_aria2_report_lines_drops_paths_without_mangling_aria2s_arithmetic() -> None:
+    """A WARN can name the file it could not open, and the no-paths rule has no exceptions.
+
+    The slash in "12GiB/28GiB(42%)" must survive, though: redacting that would destroy
+    the only part of the line anyone reads.
+    """
+    lines = launcher_app.aria2_report_lines(
+        "\n".join(
+            [
+                "[#a1b2c3 12GiB/28GiB(42%) CN:16 DL:1.0GiB ETA:16s]",
+                "[WARN] Failed to open /root/.10sorlabs-scratch/ab12-flux.safetensors",
+                "[ERROR] CUID#9 - /workspace/runpod-slim/ComfyUI/models is not writable",
+            ]
+        )
+    )
+
+    assert lines[0] == "[#a1b2c3 12GiB/28GiB(42%) CN:16 DL:1.0GiB ETA:16s]"
+    assert "[WARN] Failed to open [path]" == lines[1]
+    assert "10sorlabs-scratch" not in " ".join(lines)
+    assert "/workspace" not in " ".join(lines)
+    assert "[path]" in lines[2]
+
+
+def test_nothing_in_a_diagnostics_export_looks_like_a_path_or_a_url() -> None:
+    """The guard from the other side: a line that carries both, through the real record."""
+    store = launcher_app.Diagnostics()
+    record = store.begin_file(
+        name="flux1-dev.safetensors",
+        url="https://pub-9c2f.r2.cloudflarestorage.com/x?X-Amz-Signature=abc",
+        size_bytes=1024,
+        transport="aria2c",
+        staging="container-disk",
+    )
+    store.note_aria2_lines(
+        launcher_app.aria2_report_lines(
+            "[WARN] /workspace/models/flux.part from "
+            "https://pub-9c2f.r2.cloudflarestorage.com/y?X-Amz-Signature=def"
+        )
+    )
+    store.finish_file(record)
+
+    flattened = json.dumps(store.export())
+    assert "X-Amz-Signature" not in flattened
+    assert "://" not in flattened
+    assert "/workspace" not in flattened
