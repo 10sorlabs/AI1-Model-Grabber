@@ -474,17 +474,20 @@ h1 {
 /* The help page. Wider measure than a form view but still capped: this is prose, and
    prose at the full shell width is unreadable.
 
-   72ch rather than 62: at 62 this rendered as a ~400px column with ~680px of dead space
-   beside it in the 1080px shell, which reads as a strip rather than a page.
+   Pixels, not ch, and that is the whole point. ch is a function of the font size, and this
+   font is 13px, so an earlier 72ch resolved to about 470px - a strip inside a 1080px shell,
+   and a page twice as long as it needed to be. A measure that changes when somebody adjusts
+   the type scale is not a measure. 720px is wide for pure prose, and deliberately so: this
+   page carries tables and full-width figures that were being crushed.
 
    Not centred, and that was tried. .view-header above is full width and left aligned like
    every other view, so margin-inline:auto pushed the body out from under its own heading
    and the two stopped lining up. Left edge shared with the header is what makes it read
    as one page. */
 .docs-body {
-  max-width: 72ch;
+  max-width: 720px;
   color: var(--muted-strong);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   line-height: 1.65;
 }
 
