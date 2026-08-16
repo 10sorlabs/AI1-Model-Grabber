@@ -5959,6 +5959,240 @@ def test_the_verdict_says_which_of_the_three_a_pod_is(monkeypatch) -> None:
     assert "49 MB/s" in congested
 
 
+# 8.07 GB, the Qwen 3 8B text encoder from the pod this whole commit came off.
+_QWEN_BYTES = 8_664_748_032
+
+
+def a_skipped_and_a_real_download():
+    """The live report that reported 588 MB/s for a pod that had measured 295.
+
+    Both rows are the same file: the first attempt was cancelled part way, the second
+    downloaded it. Oldest first in the rendered table, which is why the phantom row led.
+    """
+    store = launcher_app.Diagnostics()
+    store.record_skipped_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+        verify_seconds=31.4,
+    )
+    record = store.begin_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+        transport="aria2c",
+        staging="container-disk",
+    )
+    record.update(
+        {
+            "fetch_seconds": 28.1,
+            "place_seconds": 9.2,
+            "bytes_transferred": _QWEN_BYTES,
+            "average_bytes_per_second": round(_QWEN_BYTES / 28.1, 1),
+        }
+    )
+    store.finish_file(record)
+    return store
+
+
+def test_a_file_that_was_already_there_is_not_shown_as_a_download(monkeypatch) -> None:
+    """It never downloaded. It was recorded as an 8.07 GB transfer taking zero seconds.
+
+    Keeping the row is right - it is often the entire explanation for an install that
+    finished in seconds - but it has to say what it is. A zero in a speed column reads as
+    a failure, and this file did not fail.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    text = launcher_app.render_install_report(a_skipped_and_a_real_download().export())
+
+    row = next(line for line in text.splitlines() if "already present" in line)
+    assert row.strip().startswith("Qwen 3 8B text encoder")
+    assert "8.07 GB" in row
+    # Neither a duration nor a rate, because neither was ever measured.
+    assert "0.0s" not in row
+    assert not row.rstrip().endswith("0")
+
+
+def test_the_total_counts_only_the_bytes_that_were_downloaded(monkeypatch) -> None:
+    """The defect this commit is named for.
+
+    The skipped file's bytes reached the size column and its zero reached neither timing
+    column, so the total divided two files' bytes by one file's seconds and doubled the
+    throughput of the machine it was describing - in the document a customer pastes into a
+    support conversation to prove what their pod did.
+
+    294 rather than the 295 on the pod: the total is bytes over elapsed, while a row
+    carries its own measured rate from unrounded seconds. What is pinned here is that the
+    total is one file's worth and not two.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    text = launcher_app.render_install_report(a_skipped_and_a_real_download().export())
+
+    total = next(
+        line for line in text.splitlines() if line.strip().startswith("total")
+    )
+    assert "8.07 GB" in total
+    assert "16.14 GB" not in total
+    assert total.split()[-1] == "294"
+    assert "588" not in text
+    # The timing columns are one file's too, not a sum across a file that took no time.
+    assert "28.1s" in total and "9.2s" in total
+
+
+def test_the_verdict_leaves_out_the_file_it_did_not_measure(monkeypatch) -> None:
+    """Asserted on the verdict itself, not on a mean that happens to come out right.
+
+    A skipped record used to be dropped here only because its rate is 0.0 and 0.0 is
+    falsy. These two files are chosen so that accident is not enough to hide a regression:
+    counting the skipped one halves 604 to 302 and moves the verdict from healthy to busy,
+    so the wrong answer is a different sentence rather than a different number.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(files=[a_big_file(rate=604 * 1024**2)])
+    store.record_skipped_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "Downloads averaged 604 MB/s. This pod's network is healthy." in text
+    assert "network is busy" not in text
+    assert "302 MB/s" not in text
+
+
+def test_a_report_of_nothing_but_skipped_files_does_not_divide_by_zero(monkeypatch) -> None:
+    """Every file already on disk is a normal second run, and it has no elapsed time at
+    all. The verdict says so in words rather than announcing a rate computed from nothing.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = launcher_app.Diagnostics()
+    store.record_skipped_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+        verify_seconds=31.4,
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "Not enough data yet" in text
+    total = next(
+        line for line in text.splitlines() if line.strip().startswith("total")
+    )
+    assert total.rstrip().endswith("nothing downloaded")
+    # No size, no seconds, no rate. There is no figure here that would be true.
+    assert not any(character.isdigit() for character in total), total
+
+
+def test_a_cancelled_transfer_does_not_haunt_the_next_install(monkeypatch) -> None:
+    """Where the live 588 actually came from.
+
+    A cancel used to leave its record open. The record survived the install, and the next
+    one's begin_file filed it - carrying the file's full size and no timings, because the
+    epilogue that sets them never ran. Two rows for one file, one of them a phantom.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = launcher_app.Diagnostics()
+    store.begin_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+        transport="aria2c",
+        staging="container-disk",
+    )
+    store.cancel_in_flight()
+    # The next install, which downloads it for real.
+    record = store.begin_file(
+        name="Qwen 3 8B text encoder",
+        url="https://cdn.example/qwen.safetensors",
+        size_bytes=_QWEN_BYTES,
+        transport="aria2c",
+        staging="container-disk",
+    )
+    record.update(
+        {
+            "fetch_seconds": 28.1,
+            "place_seconds": 9.2,
+            "bytes_transferred": _QWEN_BYTES,
+            "average_bytes_per_second": round(_QWEN_BYTES / 28.1, 1),
+        }
+    )
+    store.finish_file(record)
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "cancelled" in text
+    total = next(
+        line for line in text.splitlines() if line.strip().startswith("total")
+    )
+    assert "8.07 GB" in total
+    assert total.split()[-1] == "294"
+    assert "588" not in text
+
+
+def test_an_update_still_running_is_in_the_report(monkeypatch) -> None:
+    """record_comfyui_update was only called from the finally, so pressing Debug during an
+    update produced a report with no COMFYUI UPDATE section at all.
+
+    Measured live: the panel read "Updating ComfyUI, installing requirements, 2m17s" while
+    the report for that same pod said nothing about an update. It is the slowest part of a
+    MiniMax install, so that is exactly when somebody presses Debug.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(files=[a_big_file()])
+    store.record_comfyui_update(
+        workflow_id="minimax-h3",
+        in_flight=True,
+        phase="installing requirements",
+        fetch_seconds=3.4,
+        reset_seconds=1.1,
+        total_seconds=137.0,
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "COMFYUI UPDATE" in text
+    assert "still running: installing requirements, 137.0s so far" in text
+    # And the steps already behind it, which is what says the pause is the pip install.
+    assert "fetched in 3.4s" in text
+    assert "reset in 1.1s" in text
+    assert "requirements in" not in text
+
+
+def test_the_finished_update_replaces_the_running_one(monkeypatch) -> None:
+    """One update per install, not a log of every tick. The ticker publishes once a second
+    for as long as the update runs, so appending would put a hundred of them in the report.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(files=[a_big_file()])
+    for elapsed in (12.0, 74.0, 137.0):
+        store.record_comfyui_update(
+            workflow_id="minimax-h3",
+            in_flight=True,
+            phase="installing requirements",
+            total_seconds=elapsed,
+        )
+    store.record_comfyui_update(
+        workflow_id="minimax-h3",
+        fetch_seconds=3.4,
+        reset_seconds=1.1,
+        requirements_seconds=138.2,
+        total_seconds=142.9,
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert text.count("COMFYUI UPDATE") == 1
+    assert "still running" not in text
+    assert "137.0s so far" not in text
+    assert "requirements in 138.2s" in text
+    assert store.export()["comfyui_update"]["in_flight"] is False
+
+
 def test_the_storage_line_reads_the_progress_flag(monkeypatch) -> None:
     """progress_measurable is a storage-type detector; see storage_kind.
 

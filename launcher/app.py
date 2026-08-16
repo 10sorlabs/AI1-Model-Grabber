@@ -997,7 +997,29 @@ class Diagnostics:
         # neither finished nor reported an error. File it rather than dropping it.
         if self._in_flight is not None:
             self.finish_file(self._in_flight)
-        record: dict[str, Any] = {
+        record = self._blank_file_record(
+            name=name, url=url, size_bytes=size_bytes, transport=transport, staging=staging
+        )
+        self._in_flight = record
+        self._sampler = sampler
+        return record
+
+    @staticmethod
+    def _blank_file_record(
+        *,
+        name: str,
+        url: str,
+        size_bytes: int,
+        transport: str,
+        staging: str,
+    ) -> dict[str, Any]:
+        """One shape for every file record, whether it was downloaded or not.
+
+        outcome is what the report reads to decide whether a row may be averaged into the
+        totals; see _download_note. It starts as "downloaded" because that is what this
+        record is for, and only the paths that know better reassign it.
+        """
+        return {
             "name": name,
             "host": (urlsplit(url).hostname or "unknown").lower(),
             "size_bytes": size_bytes,
@@ -1005,6 +1027,7 @@ class Diagnostics:
             "transport": transport,
             "staging": staging,
             "progress_measurable": True,
+            "outcome": "downloaded",
             "digest": "",
             "fetch_seconds": 0.0,
             "verify_seconds": 0.0,
@@ -1015,9 +1038,50 @@ class Diagnostics:
             "aria2_lines": [],
             "error": None,
         }
-        self._in_flight = record
-        self._sampler = sampler
-        return record
+
+    def record_skipped_file(
+        self,
+        *,
+        name: str,
+        url: str,
+        size_bytes: int,
+        verify_seconds: float = 0.0,
+    ) -> None:
+        """A file that was already on disk, so nothing was fetched.
+
+        Worth keeping: it is frequently the entire explanation for an install that
+        finished in seconds, and before this the report simply had nothing to say about
+        those files. It is not a transfer, though, and the outcome is what stops the
+        totals and the verdict treating it as one.
+
+        transport is "none" rather than the transport it would have used. storage_kind
+        reads the first aria2c record it finds to decide which RunPod storage product
+        /workspace is, and this record measured no writes it could answer that with.
+        """
+        record = self._blank_file_record(
+            name=name, url=url, size_bytes=size_bytes, transport="none", staging=""
+        )
+        record["outcome"] = "already-present"
+        record["verify_seconds"] = round(verify_seconds, 1)
+        record["total_seconds"] = round(verify_seconds, 1)
+        # Same rule as begin_file: a record still open when the next file is filed belongs
+        # to a transfer that neither finished nor reported an error.
+        if self._in_flight is not None:
+            self.finish_file(self._in_flight)
+        self.files.appendleft(record)
+
+    def cancel_in_flight(self) -> None:
+        """Close the record for a transfer a cancel interrupted.
+
+        Left open, it survives to the next install, where begin_file's flush files it
+        carrying the file's full size and no timings at all - the epilogue that sets them
+        never ran. That record is what made one live report add an 8.07 GB row at 0.0s to
+        a real 8.07 GB download at 28.1s and announce 588 MB/s for a pod that had measured
+        295. The bytes reached the size column and nothing reached the clock.
+        """
+        if self._in_flight is not None:
+            self._in_flight["outcome"] = "cancelled"
+            self.finish_file(self._in_flight)
 
     def note_aria2_lines(self, lines: list[str]) -> None:
         if self._in_flight is not None:
@@ -1067,8 +1131,20 @@ class Diagnostics:
         requirements_seconds: float = 0.0,
         total_seconds: float = 0.0,
         error: str | None = None,
+        in_flight: bool = False,
+        phase: str | None = None,
     ) -> None:
         """The one ComfyUI update this install ran. Replaced, not appended.
+
+        in_flight is how an update that is still running reaches the report. It used to be
+        recorded only from the finally, so pressing Debug during an update produced a
+        report with no COMFYUI UPDATE section at all - measured live, with the panel
+        reading "Updating ComfyUI, installing requirements, 2m17s" at the same moment.
+        That is the slowest part of a MiniMax install and therefore exactly when somebody
+        presses Debug, so the report was silent about the pause it was opened to explain.
+
+        Replaced rather than duplicated for free: this is one attribute, so the call from
+        the finally overwrites whatever the in-flight calls left behind.
 
         Nothing in here can raise, and that is a requirement rather than an observation:
         it is called from a finally that also runs on the failing path, so an exception of
@@ -1093,6 +1169,10 @@ class Diagnostics:
             "requirements_seconds": round(requirements_seconds, 1),
             "total_seconds": round(total_seconds, 1),
             "error": redacted_for_export(str(error)) if error else None,
+            "in_flight": in_flight,
+            # Scrubbed like the error, and for the same reason: the phrases are ours today,
+            # but this is the one field here that carries prose to a chat window.
+            "phase": redacted_for_export(str(phase)) if phase else None,
         }
 
     def export(self) -> dict[str, Any]:
@@ -1312,12 +1392,43 @@ def _volume_free(path: Path | None) -> str:
     return f"{human_bytes(free)} free"
 
 
+def _download_note(record: dict[str, Any]) -> str | None:
+    """What belongs across the timing columns for a file that measured no transfer.
+
+    None means the record is a real, timed download: it prints its numbers and it counts
+    towards the totals and the verdict. Anything else is a file whose bytes were never
+    fetched or never clocked, and the string is what the row says instead.
+
+    One predicate for both jobs on purpose. A row that prints a note is exactly a row the
+    totals leave out, so the two cannot drift apart into a report whose columns and whose
+    total disagree about what happened.
+
+    Never "0.0s" and never a rate. A zero in a speed column reads as a failure, and a file
+    that was already on disk did not fail - it is usually the reason the install was quick.
+    """
+    outcome = record.get("outcome")
+    if outcome == "already-present":
+        return "already present"
+    if outcome == "cancelled":
+        return "cancelled"
+    if record.get("error"):
+        return "failed"
+    return None
+
+
 def _verdict_lines(report: dict[str, Any]) -> list[str]:
     files = report.get("files", [])
+    # Three tests, and the first is the one that matters. Until it was added, a record
+    # that measured no transfer was dropped here only because its average_bytes_per_second
+    # is 0.0 and the last test reads that field for truth - an accident, since that test
+    # exists to keep a zero out of the mean rather than to classify records. It is why
+    # this verdict happened to read 295 MB/s on the live report where the DOWNLOADS total,
+    # which had no such filter, read 588. The exclusion is deliberate now and says so.
     judgeable = [
         record
         for record in files
-        if int(record.get("size_bytes") or 0) >= _JUDGEABLE_SIZE
+        if _download_note(record) is None
+        and int(record.get("size_bytes") or 0) >= _JUDGEABLE_SIZE
         and record.get("average_bytes_per_second")
     ]
     lines: list[str] = []
@@ -1396,7 +1507,9 @@ def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
 
     out.append("POD")
     out.append(f"  storage            {storage_kind(report)}")
-    staging = files[0].get("staging") if files else None
+    # The first record that actually staged something. files[0] alone would now answer
+    # with a skipped record's empty string, and a file nobody downloaded staged nowhere.
+    staging = next((record.get("staging") for record in files if record.get("staging")), None)
     out.append(
         f"  staging            {staging or ('container-disk' if report.get('staging_available') else 'beside-destination')}"
     )
@@ -1414,21 +1527,32 @@ def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
         total_place = 0.0
         # Oldest first here: a report is read top to bottom like the install happened.
         for record in reversed(files):
-            total_bytes += int(record.get("size_bytes") or 0)
+            size = int(record.get("size_bytes") or 0)
+            name = str(record.get("name", ""))[:28]
+            note = _download_note(record)
+            if note is not None:
+                # The three timing columns are 9 + 9 + 8 wide; the note takes all of them.
+                out.append(f"  {name:<28}{human_bytes(size):>10}{note:>26}")
+                continue
+            total_bytes += size
             total_fetch += float(record.get("fetch_seconds") or 0)
             total_place += float(record.get("place_seconds") or 0)
             out.append(
-                f"  {str(record.get('name', ''))[:28]:<28}"
-                f"{human_bytes(int(record.get('size_bytes') or 0)):>10}"
+                f"  {name:<28}{human_bytes(size):>10}"
                 f"{float(record.get('fetch_seconds') or 0):>8.1f}s"
                 f"{float(record.get('place_seconds') or 0):>8.1f}s"
                 f"{float(record.get('average_bytes_per_second') or 0) / 1024**2:>8.0f}"
             )
-        mean_rate = total_bytes / total_fetch if total_fetch > 0.001 else 0
-        out.append(
-            f"  {'total':<28}{human_bytes(total_bytes):>10}"
-            f"{total_fetch:>8.1f}s{total_place:>8.1f}s{mean_rate / 1024**2:>8.0f}"
-        )
+        if total_fetch > 0.001:
+            out.append(
+                f"  {'total':<28}{human_bytes(total_bytes):>10}"
+                f"{total_fetch:>8.1f}s{total_place:>8.1f}s"
+                f"{total_bytes / total_fetch / 1024**2:>8.0f}"
+            )
+        else:
+            # Every row was a note, so there is no elapsed time to divide by. Say that
+            # rather than print a rate computed from nothing.
+            out.append(f"  {'total':<28}{'nothing downloaded':>36}")
         out.append("")
 
     if nodes:
@@ -1449,7 +1573,22 @@ def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
     update = report.get("comfyui_update")
     if update:
         out.append("COMFYUI UPDATE")
-        if update.get("skipped"):
+        if update.get("in_flight"):
+            out.append(
+                f"  still running: {update.get('phase') or 'working'}, "
+                f"{update.get('total_seconds', 0)}s so far"
+            )
+            # Whichever steps have already finished. A pause with the fetch and the reset
+            # behind it is a pip install, which is where the MiniMax cost actually is.
+            for label, key in (
+                ("fetched", "fetch_seconds"),
+                ("reset", "reset_seconds"),
+                ("requirements", "requirements_seconds"),
+            ):
+                seconds = float(update.get(key) or 0)
+                if seconds:
+                    out.append(f"  {label} in {seconds}s")
+        elif update.get("skipped"):
             reason = str(update.get("reason") or "").replace("-", " ")
             out.append(f"  skipped ({reason}), total {update.get('total_seconds', 0)}s")
         elif update.get("error"):
@@ -2295,6 +2434,11 @@ class JobController:
                 completed_at=utc_now(),
             )
         except InstallCancelled:
+            # Every cancel leaves through here, whether it was caught in the download loop,
+            # inside a placement copy on a worker thread, or between files. The record for
+            # whatever was in flight has to be closed on the way past: left open it outlives
+            # the install and is filed by the next one. See cancel_in_flight.
+            diagnostics.cancel_in_flight()
             self.update(
                 status="cancelled",
                 stage="cancelled",
@@ -2429,9 +2573,28 @@ class JobController:
                 f"{human_duration(time.monotonic() - started)}"
             )
 
+        def publish() -> None:
+            """Put the running update where /api/diagnostics/report can see it.
+
+            Reads the step timings out of the enclosing scope, so it always carries
+            whichever of them have been assigned by now. Cannot raise, for the same reason
+            the call in the finally cannot: it runs from a ticker task whose exception
+            nobody is waiting on.
+            """
+            diagnostics.record_comfyui_update(
+                workflow_id=self.state.workflow_id,
+                in_flight=True,
+                phase=phase["text"],
+                fetch_seconds=fetch_seconds,
+                reset_seconds=reset_seconds,
+                requirements_seconds=requirements_seconds,
+                total_seconds=time.monotonic() - started,
+            )
+
         def step(phrase: str) -> None:
             phase["text"] = phrase
             self.update(message=rendered())
+            publish()
 
         self.update(
             stage="updating",
@@ -2456,8 +2619,14 @@ class JobController:
             while True:
                 await asyncio.sleep(1)
                 self.update(message=rendered())
+                # So the elapsed figure in the report is never more than a second behind
+                # the one on the panel. A customer reads both and compares them.
+                publish()
 
         ticker = asyncio.create_task(tick())
+        # Before the first step, so an update that stalls in its opening git call is still
+        # a section in the report rather than an absence.
+        publish()
         try:
             # One local call and one network round trip, both under a second in the normal
             # case. If master has not moved past what this pod already has, the fetch, the
@@ -2743,6 +2912,12 @@ class JobController:
                     downloaded_bytes=completed_bytes + completed,
                     percent=fraction * download_ceiling,
                     message=f"{name} already exists — skipped.",
+                )
+                diagnostics.record_skipped_file(
+                    name=name,
+                    url=source_url,
+                    size_bytes=completed,
+                    verify_seconds=verify_seconds,
                 )
                 self._log_file_timing(
                     name,
