@@ -31,6 +31,16 @@ jobs:
           python -m pip install -r requirements-launcher.txt pytest
           python -m pytest
 
+      # Clones twelve node packs and queries PyPI, so it is minutes rather than seconds
+      # - which is why it is a step of the publish workflow rather than of every push.
+      # Every run of this workflow is a deliberate build, and this is the gate that
+      # stops one shipping with a requirement that would build from source on a
+      # customer's pod. The classifier itself is covered by the suite above, offline.
+      - name: Audit node pack requirements
+        run: |
+          python -m pip install packaging
+          python scripts/audit_node_requirements.py
+
       - name: Free runner disk space
         run: |
           echo "Disk space before cleanup:"

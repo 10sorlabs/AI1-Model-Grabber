@@ -1,0 +1,13 @@
+# Requirements that have no installable wheel and are allowed anyway.
+#
+# scripts/audit_node_requirements.py fails the build on anything here that is not
+# listed. A name on this list is a promise that the source build has been dealt with -
+# so the reason has to say how, not just that it was noticed.
+#
+# Format: name  # reason
+
+sam2   # VCS requirement of ComfyUI-Impact-Pack. Handled at runtime by --no-build-isolation:
+       # 264 kB and seconds, instead of a 3 GB torch re-download. Measured on a pod 2026-08.
+
+dlib   # sdist only; PyPI has no wheel for any Python. Built into the image by its own
+       # pinned Dockerfile layer so no pod ever compiles it.

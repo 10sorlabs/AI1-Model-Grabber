@@ -4920,3 +4920,176 @@ def test_a_successful_download_keeps_what_aria2c_reported(tmp_path, monkeypatch)
     assert record["host"] == "cdn.example"
     assert record["digest"] == "aria2c-inline"
     assert record["bytes_transferred"] == len(payload)
+
+
+audit_spec = importlib.util.spec_from_file_location(
+    "audit_node_requirements",
+    Path(__file__).resolve().parent.parent / "scripts" / "audit_node_requirements.py",
+)
+audit_script = importlib.util.module_from_spec(audit_spec)
+# Registered before it is executed: @dataclass resolves annotations through
+# sys.modules[cls.__module__], which is None for a module loaded straight off a path.
+sys.modules[audit_spec.name] = audit_script
+audit_spec.loader.exec_module(audit_script)
+
+
+def pypi_fixture(files):
+    """Stand in for pypi.org/pypi/<name>/json. No unit test here touches the network."""
+    return lambda _name: {"urls": files}
+
+
+def test_the_audit_flags_a_vcs_requirement() -> None:
+    """The line that cost a customer 46 minutes."""
+    finding = audit_script.classify_requirement(
+        "git+https://github.com/facebookresearch/sam2",
+        "ComfyUI-Impact-Pack",
+        pypi_fixture([]),
+    )
+
+    assert finding is not None
+    assert finding.package == "sam2"
+    assert finding.node == "ComfyUI-Impact-Pack"
+    assert "VCS requirement" in finding.reason
+
+
+def test_the_audit_flags_a_direct_url_requirement() -> None:
+    """PEP 508 spelling of the same problem."""
+    finding = audit_script.classify_requirement(
+        "sam-2 @ https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip",
+        "ComfyUI-Impact-Pack",
+        pypi_fixture([]),
+    )
+
+    assert finding is not None
+    assert "direct URL" in finding.reason
+
+
+def test_the_audit_flags_a_package_with_no_wheel_at_all() -> None:
+    """dlib 20.0.1: one file on PyPI, and it is a tarball."""
+    finding = audit_script.classify_requirement(
+        "dlib==20.0.1",
+        "ComfyUI_FaceAnalysis",
+        lambda _name: {
+            "releases": {
+                "20.0.1": [
+                    {"packagetype": "sdist", "filename": "dlib-20.0.1.tar.gz"},
+                ]
+            }
+        },
+    )
+
+    assert finding is not None
+    assert finding.package == "dlib"
+    assert "sdist only" in finding.reason
+
+
+def test_the_audit_accepts_an_abi3_wheel_built_for_an_older_python() -> None:
+    """Pinned against my own mistake, made by hand during the audit this replaces.
+
+    I filtered for the literal string "cp312", concluded opencv-contrib-python had no
+    wheel, and was wrong: its wheel is tagged cp37-abi3, and abi3 covers 3.12. Substring
+    matching on wheel filenames is exactly the error this script exists to make
+    impossible, so the check goes through packaging and against an explicit target.
+    """
+    finding = audit_script.classify_requirement(
+        "opencv-contrib-python",
+        "ComfyUI_LayerStyle",
+        pypi_fixture(
+            [
+                {
+                    "packagetype": "bdist_wheel",
+                    "filename": (
+                        "opencv_contrib_python-4.13.0.92-cp37-abi3-"
+                        "manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                    ),
+                },
+                {
+                    "packagetype": "sdist",
+                    "filename": "opencv-contrib-python-4.13.0.92.tar.gz",
+                },
+            ]
+        ),
+    )
+
+    assert finding is None
+
+
+def test_the_audit_flags_wheels_that_are_not_for_this_pod() -> None:
+    """Having a wheel is not the question. Having one the pod can install is."""
+    finding = audit_script.classify_requirement(
+        "some-windows-only-thing",
+        "ComfyUI-KJNodes",
+        pypi_fixture(
+            [
+                {
+                    "packagetype": "bdist_wheel",
+                    "filename": "some_windows_only_thing-1.0-cp312-cp312-win_amd64.whl",
+                }
+            ]
+        ),
+    )
+
+    assert finding is not None
+    assert "none for CPython 3.12" in finding.reason
+
+
+def test_the_audit_ignores_comments_and_pip_options() -> None:
+    for line in (
+        "",
+        "   ",
+        "# torch is already in the image",
+        "  # git+https://github.com/facebookresearch/sam2",
+        "-r other-requirements.txt",
+        "--extra-index-url https://download.pytorch.org/whl/cu128",
+    ):
+        assert audit_script.classify_requirement(line, "node", pypi_fixture([])) is None
+
+
+def test_a_listed_source_build_does_not_fail_the_run(tmp_path) -> None:
+    """The escape hatch, and the reason it demands a reason."""
+    allowlist = tmp_path / "known-source-builds.txt"
+    allowlist.write_text(
+        "# a comment\n"
+        "sam2   # handled at runtime by --no-build-isolation\n"
+        "dlib   # built into the image\n",
+        encoding="utf-8",
+    )
+
+    allowed = audit_script.read_known_source_builds(allowlist)
+    findings = [
+        audit_script.Finding("sam2", "ComfyUI-Impact-Pack", "VCS requirement"),
+        audit_script.Finding("dlib", "ComfyUI_FaceAnalysis", "sdist only"),
+        audit_script.Finding("brand-new-thing", "ComfyUI-KJNodes", "sdist only"),
+    ]
+
+    remaining = audit_script.unlisted(findings, allowed)
+
+    assert [finding.package for finding in remaining] == ["brand-new-thing"]
+    # A name with no reason is not a listing anyone can act on later.
+    assert allowed["sam2"].startswith("handled at runtime")
+
+
+def test_the_shipped_allowlist_says_how_each_source_build_is_paid_for() -> None:
+    allowed = audit_script.read_known_source_builds(audit_script.KNOWN_SOURCE_BUILDS)
+
+    assert set(allowed) == {"sam2", "dlib"}
+    assert all(reason for reason in allowed.values())
+
+
+def test_the_audit_walks_each_pinned_pack_once() -> None:
+    """The catalog lists the same pack under several workflows; cloning it twice is waste."""
+    catalog = json.loads(
+        (Path(launcher_app.__file__).resolve().parent.parent / "catalog" / "workflows.json")
+        .read_text(encoding="utf-8")
+    )
+    packs = audit_script.node_packs(catalog)
+
+    listed = [
+        node
+        for workflow in catalog["workflows"]
+        for node in workflow.get("custom_nodes", [])
+    ]
+    assert len(packs) < len(listed)
+    assert len(packs) == len({(node["repo"], node["ref"]) for node in listed})
+    # Every pack is pinned to a sha, which is what makes this audit reproducible.
+    assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for _name, _repo, ref in packs)
