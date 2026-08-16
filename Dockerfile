@@ -86,6 +86,51 @@ RUN set -eu; \
     echo "torch intact: $actual"; \
     rm /tmp/custom-node-requirements.txt /tmp/constraints.txt
 
+# dlib is built here so that no customer's pod ever builds it.
+#
+# It is the only requirement across all twelve pinned node packs with no wheel at all:
+# dlib 20.0.1 ships one file on PyPI, dlib-20.0.1.tar.gz, and every install is a CMake
+# C++ compile. ComfyUI_FaceAnalysis asks for it, ComfyUI_FaceAnalysis is in the
+# dataset-generator workflow, and that is a rented GPU spending its minutes on a
+# single-threaded compile of a CPU library. Once, on a build machine, is the right
+# number of times.
+#
+# custom-node-requirements.txt above deliberately excludes it: that file installs
+# unpinned and wheels-only, and a source build does not belong in it. This is the
+# same package, pinned, with the toolchain it needs, and verified immediately after.
+#
+# The cmake wheel carries its own binaries, so apt is only touched when the base image
+# turns out to have no C++ compiler - and then only for as long as the build takes.
+#
+# Build parallelism is capped at 4 on purpose, and it is the difference between a layer
+# that publishes and a layer that does not. Unpinned, this build ran one job per core and
+# GCC 13.3.0 died with an internal compiler error in try_forward_edges (cfgcleanup.cc:580)
+# compiling dlib/svm/structural_svm_problem_threaded.h - once in two attempts on a 32-core,
+# 31 GiB builder. Thirty-two concurrent cc1plus on headers that template-expand like dlib's
+# SVM code is roughly a gigabyte of peak resident set each; "there is lots of RAM" and
+# "no job is short of RAM" are not the same claim, and an intermittent failure on the layer
+# that gates image publishing is not something to leave to chance. Four jobs is slower and
+# it finishes.
+RUN set -eu; \
+    export MAKEFLAGS=-j4; \
+    export CMAKE_BUILD_PARALLEL_LEVEL=4; \
+    purge_toolchain=0; \
+    if ! command -v c++ >/dev/null 2>&1; then \
+      echo "no C++ compiler in the base image; installing build-essential for this layer"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends build-essential; \
+      purge_toolchain=1; \
+    fi; \
+    python3.12 -m pip install --break-system-packages --no-cache-dir cmake; \
+    python3.12 -m pip install --break-system-packages --no-cache-dir dlib==20.0.1; \
+    python3.12 -c 'import dlib; print("dlib intact:", dlib.__version__)'; \
+    python3.12 -m pip uninstall -y cmake; \
+    if [ "$purge_toolchain" = "1" ]; then \
+      apt-get purge -y build-essential; \
+      apt-get autoremove -y; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
 COPY launcher/ /opt/10sorlabs/launcher/
 COPY catalog/ /opt/10sorlabs/catalog/
 COPY docker/entrypoint.sh /start.sh

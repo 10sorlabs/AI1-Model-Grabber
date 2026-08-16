@@ -14,7 +14,10 @@
 # ComfyUI needs to start. Dockerfile verifies torch is intact immediately after.
 #
 # Deliberately absent:
-#   dlib: sdist only (dlib-20.0.1.tar.gz); compiles from source
+#   dlib: sdist only (dlib-20.0.1.tar.gz); compiles from source. Not dropped -
+#     moved. It is installed by its own pinned RUN block in the Dockerfile,
+#     immediately below this file's install, with a C++ toolchain and an import
+#     check. It is out of this list because this list is unpinned and wheels-only.
 #   opencv-contrib-python: resolves to 5.0.0.93, a major version above the
 #     4.13.0.92 opencv-python and opencv-python-headless already in the base image;
 #     a third cv2 provider on top of those two is the classic broken-cv2 setup
