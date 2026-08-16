@@ -1279,6 +1279,39 @@ def _free_of_total(path: Path | None) -> str:
     return f"{human_bytes(usage.free)} free of {human_bytes(usage.total)}"
 
 
+# Above this, a "free" figure is the host's storage pool rather than anything the customer
+# bought. Two pods reported 284316.37 GB free of 893695.00 GB for /workspace while their
+# container disk correctly read 198.21 GB of 200.00 GB. 10 TB is comfortably above the
+# largest volume RunPod sells and comfortably below what a shared pool shows, so it
+# separates the two without a second measurement.
+_SHARED_POOL_FREE = 10 * 1024**4
+
+
+def _volume_free(path: Path | None) -> str:
+    """Free space on the volume, and never a total.
+
+    shutil.disk_usage reports the filesystem the path landed on. For /workspace on a
+    Network volume that filesystem is shared host storage, so the total is the provider's
+    pool and not the volume the customer configured. A report telling somebody they have
+    893 TB is one they stop trusting, including the lines that were right.
+
+    The container disk line keeps its total: it is a real per-pod device and it measured
+    correctly on the same two pods.
+    """
+    if path is None:
+        return "unknown"
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError:
+        return "unknown"
+    if free >= _SHARED_POOL_FREE:
+        return (
+            f"{human_bytes(free)} free "
+            f"(shared storage, so this is the host's pool rather than your volume)"
+        )
+    return f"{human_bytes(free)} free"
+
+
 def _verdict_lines(report: dict[str, Any]) -> list[str]:
     files = report.get("files", [])
     judgeable = [
@@ -1368,7 +1401,7 @@ def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
         f"  staging            {staging or ('container-disk' if report.get('staging_available') else 'beside-destination')}"
     )
     out.append(f"  container disk     {_free_of_total(scratch_dir())}")
-    out.append(f"  volume             {_free_of_total(COMFYUI_DIR)}")
+    out.append(f"  volume             {_volume_free(COMFYUI_DIR)}")
     out.append("")
 
     if files:
@@ -2675,6 +2708,20 @@ class JobController:
         if destination.exists() and destination.stat().st_size > 0:
             size_matches = not expected_size or destination.stat().st_size == expected_size
             verify_started = time.monotonic()
+            # expected_sha, deliberately, and not the enforced_sha computed further down.
+            # That costs a full re-hash of every finished file on every later attempt:
+            # cancel a Dataset Generator install after the 28 GB file, press the tile
+            # again, and it is read end to end before anything else happens - about thirty
+            # seconds on a local Volume disk, minutes on a Network volume.
+            #
+            # It stands because this is the last safety net and its threat model is not
+            # the download-time one. should_verify_digest skips the digest for R2-mirrored
+            # files because aria2c has just measured those bytes; here the file was
+            # written by some earlier run, possibly one that ended uncleanly, and nothing
+            # in this process has ever seen it. copy_into_place fsyncs before os.replace
+            # and writes through a .placing sidecar, which is a real argument for trusting
+            # it - but it is an argument about our own writes, not about whatever is on
+            # the volume when we arrive.
             hash_matches = (
                 not expected_sha
                 or await asyncio.to_thread(

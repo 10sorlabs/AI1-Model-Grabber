@@ -3766,9 +3766,17 @@ for (const scenario of scenarios) {
   const timers = { started: [], cleared: [] };
   const element = (key) => (nodes[key] ||= fakeElement());
 
+  // The help page's screenshots. Built before app.js runs, because app.js walks them at
+  // load time and a figure hidden then is the whole point of the assertion.
+  const docsFigure = fakeElement();
+  const docsImage = fakeElement();
+  docsImage.parentElement = docsFigure;
+  Object.assign(docsImage, scenario.docsImage || {});
+
   const document = {
     // app.js spreads the result and reads .dataset on each entry.
     querySelectorAll: (sel) => {
+      if (sel.includes("docs-figure")) return [docsImage];
       const one = fakeElement();
       one.dataset.view = "workflows";
       one.dataset.viewTarget = "workflows";
@@ -3819,6 +3827,9 @@ for (const scenario of scenarios) {
   if (scenario.videoError && video && video.handlers.error) {
     video.handlers.error.forEach((h) => h());
   }
+  if (scenario.docsImageError && docsImage.handlers.error) {
+    docsImage.handlers.error.forEach((h) => h());
+  }
   if (scenario.account) {
     context.renderAccount(scenario.account);
   }
@@ -3839,6 +3850,7 @@ for (const scenario of scenarios) {
     videoHidden: video ? video.hidden : null,
     videoSrc: video ? video.src : null,
     metrics: nodes["#job-metrics"] ? nodes["#job-metrics"].innerHTML : null,
+    docsFigureHidden: docsFigure.hidden,
     liveTimers: timers.started.filter((id) => !timers.cleared.includes(id)).length,
   });
 }
@@ -5981,6 +5993,42 @@ def test_the_storage_line_reads_the_progress_flag(monkeypatch) -> None:
     assert "storage            unknown" in empty
 
 
+def test_the_volume_line_never_reports_the_host_pool_as_yours(monkeypatch) -> None:
+    """Two live pods read "284316.37 GB free of 893695.00 GB" for the volume while their
+    container disk correctly read 198.21 GB of 200.00 GB.
+
+    disk_usage answers for the filesystem /workspace landed on, which for a Network volume
+    is shared host storage. Telling somebody they have 893 TB costs the whole report its
+    credibility, including the lines that were right.
+    """
+    # A container disk that resolves, so the line below it is a real measurement and not
+    # the "unknown" a machine without scratch space would produce.
+    monkeypatch.setattr(launcher_app, "scratch_dir", lambda: Path("/scratch"))
+
+    pretend_free_space(monkeypatch, 284_316 * 1024**3)
+    shared = launcher_app.render_install_report(report_store(files=[a_big_file()]).export())
+
+    volume = next(line for line in shared.splitlines() if "  volume " in line)
+    assert volume.strip() == (
+        "volume             284316.00 GB free (shared storage, so this is the host's "
+        "pool rather than your volume)"
+    )
+    assert "free of" not in volume
+    # The container disk is a real per-pod device and measured correctly on both pods.
+    # It keeps its total, and this is the line that proves the change was surgical.
+    assert "container disk     284316.00 GB free of 284316.00 GB" in shared
+
+    # A volume small enough to be a volume says nothing extra.
+    pretend_free_space(monkeypatch, 284 * 1024**3)
+    plausible = launcher_app.render_install_report(
+        report_store(files=[a_big_file()]).export()
+    )
+
+    volume = next(line for line in plausible.splitlines() if "  volume " in line)
+    assert volume.strip() == "volume             284.00 GB free"
+    assert "host's pool" not in plausible
+
+
 def test_a_node_that_retried_gets_explained(monkeypatch) -> None:
     """A customer reading raw numbers will worry about it. It is normal."""
     pretend_free_space(monkeypatch, 300 * 1024**3)
@@ -6214,6 +6262,34 @@ def test_every_help_page_image_resolves_or_disappears_by_itself() -> None:
     assert '.docs-figure img' in js
     assert 'addEventListener("error"' in js
     assert "figure.hidden = true" in js
+
+
+def test_a_figure_whose_image_already_failed_is_hidden_too() -> None:
+    """The listener on its own never fired on a pod, and the live page showed broken
+    image icons with their alt text underneath.
+
+    These <img> tags are inline in index.html and app.js is deferred, so a missing file
+    fires its error event during parse - before this script exists - and never fires it
+    again. The old test drove the listener by hand, so it passed against exactly the code
+    that was failing. This one presents what the DOM actually looks like afterwards and
+    never touches the handler.
+    """
+    rows = run_upsell_harness(
+        [
+            {"name": "already-failed", "docsImage": {"complete": True, "naturalWidth": 0}},
+            {"name": "loaded", "docsImage": {"complete": True, "naturalWidth": 1280}},
+            {"name": "still-loading", "docsImage": {"complete": False}},
+            # The listener still has to work for an image that fails after we attach.
+            {"name": "fails-later", "docsImageError": True},
+        ],
+        launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js",
+    )
+
+    assert rows["already-failed"]["docsFigureHidden"] is True
+    assert rows["fails-later"]["docsFigureHidden"] is True
+    # And a picture that is fine stays on the page.
+    assert rows["loaded"]["docsFigureHidden"] is False
+    assert rows["still-loading"]["docsFigureHidden"] is False
 
 
 def test_docs_is_a_real_view_that_the_switcher_accepts() -> None:

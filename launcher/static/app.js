@@ -950,13 +950,25 @@ elements.cancel.addEventListener("click", async () => {
 // parentElement, and an unguarded call here would throw during load and take every
 // harness test with it.
 document.querySelectorAll(".docs-figure img").forEach((image) => {
-  image.addEventListener("error", () => {
+  const hide = () => {
     const figure =
       (typeof image.closest === "function" && image.closest("figure")) ||
       image.parentElement ||
       null;
     if (figure) figure.hidden = true;
-  });
+  };
+  image.addEventListener("error", hide);
+  // The listener alone never fired on a pod, which is why the live page showed broken
+  // image icons with their alt text. These <img> tags are inline in index.html and this
+  // script is deferred, so a missing file has already fired its error event by the time
+  // we get here and will never fire it again. complete with a zero naturalWidth is what
+  // that looks like afterwards, and it is the only evidence left.
+  //
+  // complete is tested first so naturalWidth is only ever read on something that really
+  // is a finished image. The JS harness's fake element has neither property, and
+  // !undefined is true - so testing naturalWidth alone would hide a figure on every
+  // element the harness hands back, and the assertion below would pass on nothing.
+  if (image.complete && !image.naturalWidth) hide();
 });
 
 elements.restart.addEventListener("click", restartComfyUI);
