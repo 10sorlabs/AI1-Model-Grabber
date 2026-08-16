@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, SecretStr, field_validator
 
@@ -1225,6 +1225,225 @@ def human_bytes(count: float) -> str:
             return f"{count:.2f} {unit}" if unit == "GB" else f"{count:.0f} {unit}"
         count /= 1024
     return f"{count:.2f} GB"
+
+
+# A gigabyte, and the floor for judging a pod. Anything smaller never escapes the few
+# seconds a set of connections takes to reach full speed, so an 80 MB upscaler at 122 MB/s
+# is normal and judging on it would flag every healthy pod as broken.
+_JUDGEABLE_SIZE = 1024**3
+# Both from measured installs, and both from only two runs - say so, so whoever
+# recalibrates knows what they are replacing. A healthy pod moved 47.9 GB at 604 MB/s
+# (a second sample reached 951); a busy one moved the same workflow at 166 MB/s, and the
+# same account on a third pod saw a single stream to GitHub at 6.2 MB/s.
+_VERDICT_HEALTHY = 400 * 1024**2
+_VERDICT_BUSY = 150 * 1024**2
+
+
+def storage_kind(report: dict[str, Any]) -> str:
+    """Which RunPod storage product /workspace is, read off a progress flag.
+
+    written_bytes() returns None exactly when the filesystem derives st_blocks from a
+    file's length instead of real allocation. That is MooseFS behaviour, and RunPod's
+    Network volume is MooseFS over FUSE; a local Volume disk reports real blocks. So
+    progress_measurable, which exists to stop the panel fabricating a percentage, also
+    says which storage the customer bought. That is not obvious and a future reader will
+    delete it as dead weight unless this comment stops them.
+
+    It matters because placement measured ~26 MB/s on a Network volume against 332 MB/s
+    direct on a Volume disk. Tenfold, on the step that writes every byte of a 44.6 GB
+    workflow.
+
+    Only aria2c records carry a real answer. The field defaults to True and is reassigned
+    only on that branch, so an httpx record - which is to say every standard-tier install -
+    would otherwise report "Volume disk" whatever the pod is actually on, for exactly the
+    customer least able to work it out.
+    """
+    for record in report.get("files", []):
+        if record.get("transport") == "aria2c":
+            return (
+                "Volume disk (local)"
+                if record.get("progress_measurable")
+                else "Network volume (shared)"
+            )
+    return "unknown"
+
+
+def _free_of_total(path: Path | None) -> str:
+    if path is None:
+        return "unknown"
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return "unknown"
+    # Numbers only. The path itself never appears: this is pasted into chat windows.
+    return f"{human_bytes(usage.free)} free of {human_bytes(usage.total)}"
+
+
+def _verdict_lines(report: dict[str, Any]) -> list[str]:
+    files = report.get("files", [])
+    judgeable = [
+        record
+        for record in files
+        if int(record.get("size_bytes") or 0) >= _JUDGEABLE_SIZE
+        and record.get("average_bytes_per_second")
+    ]
+    lines: list[str] = []
+
+    if not judgeable:
+        lines.append(
+            "Not enough data yet. Nothing over 1 GB has finished downloading, and smaller "
+            "files are always slower than the pod really is."
+        )
+    else:
+        mean = sum(
+            float(record["average_bytes_per_second"]) for record in judgeable
+        ) / len(judgeable)
+        rate = human_bytes(mean)
+        if mean >= _VERDICT_HEALTHY:
+            lines.append(f"Downloads averaged {rate}/s. This pod's network is healthy.")
+        else:
+            harder = "very busy" if mean < _VERDICT_BUSY else "busy"
+            lines.append(
+                f"Downloads averaged {rate}/s. Normal is 300-950 MB/s. This pod's network "
+                f"is {harder}, which is the machine it is running on rather than the "
+                f"download service. If it stays here for a few minutes, stopping this pod "
+                f"and deploying a new one usually helps."
+            )
+
+    if storage_kind(report) == "Network volume (shared)":
+        # A trade-off, never "you chose wrong": a Network volume survives termination and
+        # can be mounted by several pods, which are real reasons to pick one.
+        lines.append(
+            "This pod stores its models on a Network volume, which is shared storage. "
+            "Saving files to it runs at roughly a tenth of a local Volume disk, whatever "
+            "the download speed was. That is the storage type, not the download service."
+        )
+
+    for node in report.get("nodes", []):
+        if node.get("retried_with_isolation"):
+            lines.append(
+                f"{node.get('name', 'a custom node')} needed a second install attempt to "
+                f"build one of its dependencies. That is normal and it succeeded."
+            )
+
+    update = report.get("comfyui_update") or {}
+    if update.get("error"):
+        lines.append(f"The ComfyUI update did not finish: {update['error']}")
+
+    return lines
+
+
+def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
+    """The diagnostics, written for a person rather than for us.
+
+    /api/diagnostics stays as it is - JSON, for us. This is the same data laid out for
+    somebody about to paste it into a support conversation, which is why it carries a
+    verdict in words: the numbers alone have been read as "RapidCache is slow" more than
+    once, when what they say is "this pod is busy".
+
+    Same absolute rule as the JSON export, through the same helper: no URLs and no
+    filesystem paths. Disk figures are numbers.
+    """
+    files = report.get("files", [])
+    nodes = report.get("nodes", [])
+    out: list[str] = []
+
+    out.append("10sorLabs install report")
+    out.append(
+        f"launcher {report.get('launcher_ref') or 'unknown'}   "
+        f"tier {tier or 'unknown'}   "
+        f"aria2c {'yes' if report.get('aria2c_available') else 'no'}"
+    )
+    out.append("")
+
+    out.append("VERDICT")
+    for line in _verdict_lines(report):
+        out.append(f"  {line}")
+    out.append("")
+
+    out.append("POD")
+    out.append(f"  storage            {storage_kind(report)}")
+    staging = files[0].get("staging") if files else None
+    out.append(
+        f"  staging            {staging or ('container-disk' if report.get('staging_available') else 'beside-destination')}"
+    )
+    out.append(f"  container disk     {_free_of_total(scratch_dir())}")
+    out.append(f"  volume             {_free_of_total(COMFYUI_DIR)}")
+    out.append("")
+
+    if files:
+        out.append("DOWNLOADS")
+        out.append(
+            f"  {'file':<28}{'size':>10}{'fetch':>9}{'place':>9}{'MB/s':>8}"
+        )
+        total_bytes = 0
+        total_fetch = 0.0
+        total_place = 0.0
+        # Oldest first here: a report is read top to bottom like the install happened.
+        for record in reversed(files):
+            total_bytes += int(record.get("size_bytes") or 0)
+            total_fetch += float(record.get("fetch_seconds") or 0)
+            total_place += float(record.get("place_seconds") or 0)
+            out.append(
+                f"  {str(record.get('name', ''))[:28]:<28}"
+                f"{human_bytes(int(record.get('size_bytes') or 0)):>10}"
+                f"{float(record.get('fetch_seconds') or 0):>8.1f}s"
+                f"{float(record.get('place_seconds') or 0):>8.1f}s"
+                f"{float(record.get('average_bytes_per_second') or 0) / 1024**2:>8.0f}"
+            )
+        mean_rate = total_bytes / total_fetch if total_fetch > 0.001 else 0
+        out.append(
+            f"  {'total':<28}{human_bytes(total_bytes):>10}"
+            f"{total_fetch:>8.1f}s{total_place:>8.1f}s{mean_rate / 1024**2:>8.0f}"
+        )
+        out.append("")
+
+    if nodes:
+        out.append("CUSTOM NODES")
+        out.append(
+            f"  {'node':<28}{'clone':>8}{'deps':>9}{'total':>9}   retried with isolation"
+        )
+        for node in reversed(nodes):
+            out.append(
+                f"  {str(node.get('name', ''))[:28]:<28}"
+                f"{float(node.get('clone_seconds') or 0):>7.1f}s"
+                f"{float(node.get('dependencies_seconds') or 0):>8.1f}s"
+                f"{float(node.get('total_seconds') or 0):>8.1f}s"
+                f"   {'yes' if node.get('retried_with_isolation') else 'no'}"
+            )
+        out.append("")
+
+    update = report.get("comfyui_update")
+    if update:
+        out.append("COMFYUI UPDATE")
+        if update.get("skipped"):
+            reason = str(update.get("reason") or "").replace("-", " ")
+            out.append(f"  skipped ({reason}), total {update.get('total_seconds', 0)}s")
+        elif update.get("error"):
+            out.append(f"  failed: {update['error']}")
+        else:
+            out.append(
+                f"  fetched in {update.get('fetch_seconds', 0)}s, "
+                f"reset in {update.get('reset_seconds', 0)}s, "
+                f"requirements in {update.get('requirements_seconds', 0)}s, "
+                f"total {update.get('total_seconds', 0)}s"
+            )
+        out.append("")
+
+    slowest = min(
+        (record for record in files if record.get("aria2_lines")),
+        key=lambda record: float(record.get("average_bytes_per_second") or 0),
+        default=None,
+    )
+    if slowest is not None:
+        out.append("SLOWEST FILE - what aria2c reported")
+        for line in slowest["aria2_lines"]:
+            out.append(f"  {line}")
+        out.append("")
+
+    # Belt and braces over the per-field redaction: everything above came from records
+    # that were scrubbed on the way in, and this is the last gate before a chat window.
+    return redacted_for_export("\n".join(out).rstrip() + "\n")
 
 
 def restart_timeout() -> float:
@@ -3770,6 +3989,22 @@ async def diagnostics_endpoint() -> dict[str, Any]:
     path, because the answer to "can you send me this" has to be yes.
     """
     return diagnostics.export()
+
+
+@app.get("/api/diagnostics/report", response_class=PlainTextResponse)
+async def diagnostics_report() -> str:
+    """The same data as /api/diagnostics, written for a person to read and paste.
+
+    fetch_status blocks for up to ten seconds on a cache miss, so it goes to a thread -
+    the same reason /api/account does. A tier we cannot establish is reported as unknown
+    rather than guessed at.
+    """
+    try:
+        snapshot = await asyncio.to_thread(account_snapshot)
+        tier = str((snapshot.get("status") or {}).get("tier") or "unknown")
+    except Exception:  # noqa: BLE001 - a report that omits the tier still helps
+        tier = "unknown"
+    return render_install_report(diagnostics.export(), tier=tier)
 
 
 @app.post("/api/install/{workflow_id}")

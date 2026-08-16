@@ -5826,3 +5826,195 @@ def test_a_short_run_is_kept_whole_with_no_marker() -> None:
 
     assert len(lines) == 12
     assert not any("omitted" in line for line in lines)
+
+
+def report_store(files=(), nodes=(), update=None):
+    """A Diagnostics with records already in it, newest first as the real one keeps them."""
+    store = launcher_app.Diagnostics()
+    for entry in files:
+        record = store.begin_file(
+            name=entry.get("name", "model.safetensors"),
+            url="https://cdn.example/model.safetensors",
+            size_bytes=entry.get("size_bytes", 0),
+            transport=entry.get("transport", "aria2c"),
+            staging=entry.get("staging", "container-disk"),
+        )
+        record.update(
+            {
+                key: value
+                for key, value in entry.items()
+                if key not in {"name", "size_bytes", "transport", "staging"}
+            }
+        )
+        store.finish_file(record)
+    for node in nodes:
+        store.record_node(**node)
+    if update is not None:
+        store.record_comfyui_update(**update)
+    return store
+
+
+def a_big_file(name="Qwen Rapid AIO", rate=604 * 1024**2, **overrides):
+    entry = {
+        "name": name,
+        "size_bytes": 28 * 1024**3,
+        "average_bytes_per_second": rate,
+        "fetch_seconds": 123.0,
+        "place_seconds": 109.5,
+        "progress_measurable": True,
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_the_report_renders_with_nothing_to_report(monkeypatch) -> None:
+    """A pod that has installed nothing must still produce something readable."""
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    text = launcher_app.render_install_report(launcher_app.Diagnostics().export())
+
+    assert "10sorLabs install report" in text
+    assert "VERDICT" in text
+    assert "Not enough data yet" in text
+    assert text.endswith("\n")
+
+
+def test_small_files_never_produce_a_verdict(monkeypatch) -> None:
+    """An 80 MB upscaler at 122 MB/s is normal. Judging on it flags every healthy pod."""
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(
+        files=[
+            a_big_file(
+                name="4x-upscaler",
+                size_bytes=80 * 1024**2,
+                rate=122 * 1024**2,
+            )
+        ]
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "Not enough data yet" in text
+    assert "network is healthy" not in text
+    assert "network is busy" not in text
+
+
+def test_the_verdict_says_which_of_the_three_a_pod_is(monkeypatch) -> None:
+    """Always with the number in it: a verdict with no figure invites an argument."""
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    healthy = launcher_app.render_install_report(
+        report_store(files=[a_big_file(rate=604 * 1024**2)]).export()
+    )
+    assert "network is healthy" in healthy
+    assert "604 MB/s" in healthy
+
+    busy = launcher_app.render_install_report(
+        report_store(files=[a_big_file(rate=231 * 1024**2)]).export()
+    )
+    assert "network is busy" in busy
+    assert "231 MB/s" in busy
+    assert "deploying a new one usually helps" in busy
+
+    congested = launcher_app.render_install_report(
+        report_store(files=[a_big_file(rate=49 * 1024**2)]).export()
+    )
+    assert "network is very busy" in congested
+    assert "49 MB/s" in congested
+
+
+def test_the_storage_line_reads_the_progress_flag(monkeypatch) -> None:
+    """progress_measurable is a storage-type detector; see storage_kind.
+
+    And only on aria2c records. It defaults to True and is only ever reassigned on that
+    branch, so reading it off an httpx record would tell every standard-tier customer they
+    are on a Volume disk whatever they actually bought.
+    """
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    local = launcher_app.render_install_report(
+        report_store(files=[a_big_file(progress_measurable=True)]).export()
+    )
+    assert "Volume disk (local)" in local
+    assert "Network volume, which is shared storage" not in local
+
+    network = launcher_app.render_install_report(
+        report_store(files=[a_big_file(progress_measurable=False)]).export()
+    )
+    assert "Network volume (shared)" in network
+    assert "roughly a tenth of a local Volume disk" in network
+
+    # The standard tier: httpx never sets the flag, so it cannot be read as an answer.
+    standard = launcher_app.render_install_report(
+        report_store(
+            files=[a_big_file(transport="httpx", progress_measurable=True)]
+        ).export()
+    )
+    assert "storage            unknown" in standard
+    assert "Network volume, which is shared storage" not in standard
+
+    empty = launcher_app.render_install_report(launcher_app.Diagnostics().export())
+    assert "storage            unknown" in empty
+
+
+def test_a_node_that_retried_gets_explained(monkeypatch) -> None:
+    """A customer reading raw numbers will worry about it. It is normal."""
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(
+        files=[a_big_file()],
+        nodes=[
+            {
+                "name": "ComfyUI_FaceAnalysis",
+                "clone_seconds": 4.5,
+                "dependencies_seconds": 227.0,
+                "total_seconds": 231.9,
+                "retried_with_isolation": True,
+            }
+        ],
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "ComfyUI_FaceAnalysis needed a second install attempt" in text
+    assert "That is normal and it succeeded." in text
+    assert "CUSTOM NODES" in text
+
+
+def test_the_report_carries_no_url_and_no_path(monkeypatch) -> None:
+    """It exists to be pasted into a chat window. Scanned, not spot-checked."""
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+    store = report_store(
+        files=[a_big_file()],
+        nodes=[{"name": "ComfyUI-Impact-Pack", "total_seconds": 11.5}],
+        update={
+            "workflow_id": "minimax-h3",
+            "error": (
+                "fatal: not a git repository: /workspace/runpod-slim/ComfyUI/.git via "
+                "https://github.com/x/y.git?token=secret"
+            ),
+        },
+    )
+    store.note_aria2_lines(
+        launcher_app.aria2_report_lines(
+            "[WARN] /workspace/models/flux.part from "
+            "https://pub-9c2f.r2.cloudflarestorage.com/y?X-Amz-Signature=def"
+        )
+    )
+
+    text = launcher_app.render_install_report(store.export())
+
+    assert "://" not in text
+    assert "X-Amz-Signature" not in text
+    for line in text.splitlines():
+        for token in line.split():
+            assert not token.startswith("/"), f"a path reached the report: {token!r}"
+
+
+def test_the_report_endpoint_answers_as_plain_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    with TestClient(launcher_app.app) as client:
+        response = client.get("/api/diagnostics/report")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "10sorLabs install report" in response.text
