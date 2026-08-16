@@ -286,10 +286,28 @@ _UNRESOLVED: Any = object()
 _scratch_dir: Any = _UNRESOLVED
 
 
+def _exists_or_denied(path: Path) -> bool:
+    """exists(), except that a path we may not stat answers False instead of raising.
+
+    EACCES is not in pathlib's ignore list, so Path.exists() propagates PermissionError
+    rather than returning False. Both callers below are walking up to the nearest ancestor
+    they can judge, and a directory we cannot stat is one we cannot judge - so for that
+    walk the honest answer is "keep walking".
+
+    Found by CI on its first run against this branch: the runner is not root, /root is
+    0700, and the walk over /root/.10sorlabs-scratch took the whole resolve down. Every
+    local run passed because it ran as root.
+    """
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def _resolve_scratch_dir() -> Path | None:
     """Inspect only - this never creates anything. See scratch_dir()."""
     anchor = COMFYUI_DIR
-    while not anchor.exists() and anchor != anchor.parent:
+    while not _exists_or_denied(anchor) and anchor != anchor.parent:
         anchor = anchor.parent
     try:
         models_device = anchor.stat().st_dev
@@ -307,7 +325,7 @@ def _resolve_scratch_dir() -> Path | None:
         # The candidate itself usually does not exist yet, so judge its nearest existing
         # ancestor: that is the filesystem it would be created on.
         probe = candidate
-        while not probe.exists() and probe != probe.parent:
+        while not _exists_or_denied(probe) and probe != probe.parent:
             probe = probe.parent
         try:
             if probe.stat().st_dev == models_device:

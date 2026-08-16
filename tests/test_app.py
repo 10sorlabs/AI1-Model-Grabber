@@ -1972,6 +1972,45 @@ def test_scratch_is_only_used_when_it_is_a_different_device(
     assert launcher_app._resolve_scratch_dir() == candidate
 
 
+def test_a_candidate_we_may_not_stat_is_skipped_rather_than_fatal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """/root is 0700 and the launcher is not always root.
+
+    Path.exists() raises PermissionError on a path it may not stat - EACCES is not in
+    pathlib's ignore list - and _resolve_scratch_dir always walks /root/.10sorlabs-scratch
+    as its second candidate. So on any host where the launcher is not root, resolving the
+    scratch directory raised instead of falling through to /tmp, and it did so from inside
+    _download_file. Pods run as root, which is the only reason this never showed there.
+
+    CI found it on its first run; every local run passed because it ran as root. This test
+    is what makes it reproducible on the machine where it was invisible, so it fails
+    against the unfixed resolver whoever runs it.
+    """
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    # Rejected on device, so the loop moves on to the hardcoded candidate underneath it.
+    same_device = tmp_path / "same-device"
+    same_device.mkdir()
+    monkeypatch.setenv("LCT_SCRATCH_DIR", str(same_device))
+
+    hardcoded = Path("/root/.10sorlabs-scratch")
+    unreadable = {str(hardcoded), str(hardcoded.parent)}
+    real_exists = Path.exists
+
+    def deny(self, *args, **kwargs):
+        """What a 0700 /root does to the walk, on any machine that runs this."""
+        if str(self) in unreadable:
+            raise PermissionError(13, "Permission denied")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", deny)
+
+    # The assertion is that this returns at all. Whatever it settles on, a directory it
+    # was not allowed to judge is not it.
+    assert launcher_app._resolve_scratch_dir() != hardcoded
+
+
 def test_staging_never_costs_a_download_that_would_otherwise_work(
     tmp_path,
     monkeypatch,
