@@ -6448,9 +6448,20 @@ def test_the_help_page_is_served_as_part_of_the_page(tmp_path, monkeypatch) -> N
     assert 'data-view-target="docs"' in page
     assert 'id="view-docs"' in page
     # The content really is in the page, not a placeholder waiting on a fetch.
-    assert "Think of your pod's internet connection as a water pipe" in page
-    assert "What a pod actually is" in page
-    assert "The best speed your pod can give you" in page
+    #
+    # Asserted on structure and on headings, never on a sentence of body copy. The first
+    # version of this pinned the opening line verbatim and broke the moment that line was
+    # edited, which is a test punishing the one kind of change this page should invite.
+    # Headings are the contract - they are the page's shape, and renaming one is a
+    # deliberate act worth failing a test over.
+    body = page.split('<article class="docs-body">')[1].split("</article>")[0]
+    headings = re.findall(r"<h2>([^<]+)</h2>", body)
+    assert "What RapidCache is" in headings
+    assert "What a pod actually is" in headings
+    assert "What we promise" in headings
+    assert len(headings) >= 10
+    # Prose, not an empty shell: tags stripped, this is a page rather than a stub.
+    assert len(re.sub(r"<[^>]+>", " ", body).split()) > 500
 
 
 def test_the_help_page_speaks_in_sentences_not_dashes() -> None:

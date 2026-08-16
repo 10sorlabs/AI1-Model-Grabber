@@ -475,11 +475,14 @@ h1 {
    prose at the full shell width is unreadable.
 
    72ch rather than 62: at 62 this rendered as a ~400px column with ~680px of dead space
-   beside it in the 1080px shell, which reads as a strip rather than a page. Centred for
-   the same reason - a capped column pinned left leaves all of that gap on one side. */
+   beside it in the 1080px shell, which reads as a strip rather than a page.
+
+   Not centred, and that was tried. .view-header above is full width and left aligned like
+   every other view, so margin-inline:auto pushed the body out from under its own heading
+   and the two stopped lining up. Left edge shared with the header is what makes it read
+   as one page. */
 .docs-body {
   max-width: 72ch;
-  margin-inline: auto;
   color: var(--muted-strong);
   font-size: var(--text-md);
   line-height: 1.65;

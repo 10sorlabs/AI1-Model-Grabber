@@ -307,38 +307,35 @@
           <article class="docs-body">
             <h2>What RapidCache is</h2>
             <p>
-              Think of your pod's internet connection as a water pipe. Everything you
-              download comes through it.
+              Your pod has one internet connection. Think of it as a pipe.
             </p>
             <p>
-              Model files normally come from Hugging Face, and Hugging Face lets your pod
-              open <strong>one tap</strong> on that pipe. That is their rule, not our choice.
+              Model files come from Hugging Face, and Hugging Face allows
+              <strong>one tap</strong> on that pipe per file. Their rule. There is no way
+              around it.
             </p>
             <p>
-              RapidCache keeps the same files, identical files with identical checksums, on
-              storage that lets you open <strong>sixteen taps at once</strong>.
+              RapidCache holds the same files, byte for byte, on storage that allows
+              <strong>sixteen</strong>.
             </p>
             <p>
-              <strong>Why that matters when things are busy.</strong> Your pod shares a
-              server with other people's pods. When one of those pods starts pulling a
-              large dataset, there is less of the server's connection left for everyone
-              else on it, including you. When it finishes, yours comes back.
+              <strong>Why that matters when things are busy.</strong> Your pod shares its
+              server with other people's pods. One of them starts a big download and there
+              is less left for everyone, you included. It finishes and yours comes back.
             </p>
             <p>
-              Sixteen weak taps still fill the bucket about sixteen times faster than one
-              weak tap.
+              Sixteen weak taps still fill a bucket sixteen times faster than one.
             </p>
 
             <h2>What a pod actually is</h2>
             <p>
-              When you rent a pod, what you are guaranteed is the GPU. The internet
-              connection and the storage hardware belong to the machine it sits in, and
-              every other pod on that machine is using them too. You cannot see those pods,
-              and neither can we.
+              You rent a GPU. The internet connection and the storage belong to the
+              machine it sits in, shared with every other pod on that machine. You cannot
+              see them. Neither can we.
             </p>
             <p>
-              So a good pod and a bad pod are not different products. They are the same pod
-              on a quiet server or a busy one, and that can change in minutes.
+              There is no such thing as a bad pod, only a busy server. The same pod can be
+              both inside ten minutes.
             </p>
 
             <h2>Why is my download only 80 MB/s?</h2>
@@ -354,8 +351,8 @@
             </div>
             <p><strong>That number is your pod, not the service.</strong></p>
             <p>
-              Those are two pods pulling the same 11.46 GB file at the same moment. Both
-              were busy. One was signed in to RapidCache, one was not.
+              Two pods, same 11.46 GB file, same moment. Both busy. One signed in to
+              RapidCache, one not.
             </p>
             <div class="docs-table-wrap">
               <table class="docs-table">
@@ -375,13 +372,13 @@
               </table>
             </div>
             <p>
-              So 97 MB/s is not RapidCache being slow. It is RapidCache doing its job on a
-              machine that only had about 6 MB/s to give a single connection.
+              97 MB/s is what RapidCache managed on a machine that could spare 6 MB/s for
+              a single connection.
             </p>
             <p>
-              <strong>Nothing is broken when this happens.</strong> Every connection is
-              still open and still working, so you see no error, only smaller numbers. They
-              grow again when the pod that was busy stops.
+              <strong>Nothing is broken when this happens.</strong> Every connection stays
+              open and working. You get no error because there is no error, just smaller
+              numbers, and they climb back when the busy pod finishes.
             </p>
 
             <h2>What good and bad look like</h2>
@@ -399,7 +396,7 @@
                 <img src="docs/speed-range-4.png" alt="An install reading 55.6 MB/s" />
               </figure>
             </div>
-            <p>Those four readings are all real installs. From our own measurements:</p>
+            <p>All four are real installs. Our own measurements:</p>
             <div class="docs-table-wrap">
               <table class="docs-table">
                 <tbody>
@@ -411,7 +408,7 @@
             </div>
             <p>
               We have watched <strong>one file move 306 to 49 to 233 MB/s in a few
-              minutes</strong>, with nothing changing at either end. One reading tells you
+              minutes</strong>, nothing changing at either end. One reading tells you
               nothing.
             </p>
 
@@ -419,8 +416,8 @@
             <ul class="docs-list">
               <li>
                 <strong>A slow reading in the first minute or two: ignore it.</strong>
-                Connections take a few seconds to reach full speed, and a 300 MB file
-                finishes before they get there. Small files always read lower than big ones.
+                Connections need a few seconds to reach full speed and a 300 MB file is
+                over before they get there. Small files always read lower.
               </li>
               <li>
                 <strong>Still under 150 MB/s after several minutes, with no sign of
@@ -428,9 +425,9 @@
                 one. You will land on a different machine.
               </li>
               <li>
-                <strong>Do not restart immediately.</strong> You will usually lose more time
-                redeploying than you would have lost waiting, and cancelling to wait costs
-                you nothing. We have seen pods recover fivefold on their own.
+                <strong>Do not restart immediately.</strong> Redeploying usually costs more
+                time than waiting would have, and waiting is free. We have seen pods recover
+                fivefold on their own.
               </li>
               <li>
                 <strong>Not sure?</strong> Press <strong>Debug</strong>. It tells you what
@@ -443,13 +440,13 @@
               Cancel stops the install. It does not throw away what has already come down.
             </p>
             <p>
-              It takes effect immediately, including while custom nodes are installing,
-              which is where an install otherwise sits for minutes.
+              It takes effect immediately, including during custom node installs, where
+              things otherwise sit for minutes.
             </p>
             <p>
-              Press the same workflow again on the same pod and it carries on. Files that
-              finished are checked rather than downloaded again, and a file that was part
-              way through resumes from where it stopped. Nothing is fetched twice.
+              Press the same workflow again on the same pod and it carries on. Finished
+              files are checked rather than fetched again, and a half-finished one picks up
+              where it stopped. Nothing comes down twice.
             </p>
             <p>Two things worth knowing:</p>
             <ul class="docs-list">
@@ -488,12 +485,12 @@
               </li>
               <li>
                 <strong>Saving to disk:</strong> copying the finished file onto your pod's
-                storage. No internet is involved, so it usually reads much higher.
+                storage. No internet involved, so it usually reads much higher.
               </li>
             </ul>
             <p>
-              Seeing 77 MB/s and then 1.10 GB/s a moment later is normal. They are not the
-              same thing.
+              Seeing 77 MB/s and then 1.10 GB/s a moment later is normal. Different job,
+              different number.
             </p>
 
             <h2>Setting up your pod</h2>
@@ -575,20 +572,19 @@
               took, what kind of storage you are on, and anything that failed.
             </p>
             <p>
-              It carries no passwords, no links and no file locations, so it is safe to
-              paste anywhere. Sending it beats describing the problem.
+              No passwords, no links, no file locations. Safe to paste anywhere, and it
+              beats describing the problem.
             </p>
 
             <h2>What we promise</h2>
             <p>RapidCache cannot make your server less busy. Nobody can.</p>
             <p>
-              What it does is take as much of whatever your pod has available as the
-              connection allows.
+              What it does is take everything your pod has to give, instead of the
+              fraction a single connection would get.
             </p>
             <p>
-              That is the promise. Not a fixed speed, because nobody can honestly promise a
-              speed on shared hardware. The best speed your pod can give you, every time you
-              install.
+              That is the promise. Not a number, because nobody can honestly promise a
+              number on shared hardware.
             </p>
           </article>
         </section>
