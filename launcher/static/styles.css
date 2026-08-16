@@ -22,6 +22,13 @@
   --warning: #e8c985;
   --warning-line: rgba(221, 173, 75, 0.32);
   --warning-soft: rgba(221, 173, 75, 0.07);
+  /* Mirrors --warning rather than --danger, because the two existing triples differ and
+     a pill needs exactly this set: a text colour, a fill and a border. --danger's second
+     entry is a lighter text tone, which a pill has no use for. Same lightness band as
+     --warning so the two sit together without one shouting. */
+  --success: #7fd6a0;
+  --success-line: rgba(127, 214, 160, 0.34);
+  --success-soft: rgba(127, 214, 160, 0.1);
 
   /* Type scale. The old range was 0.62–0.92rem, which left nothing leading the eye. */
   --text-2xs: 0.625rem;
@@ -462,6 +469,46 @@ h1 {
   color: var(--muted);
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+/* The pill is the signal that RapidCache is on. Standard tier keeps the plain
+   .catalog-state treatment on purpose: a second pill in another colour would turn a
+   presence-or-absence signal into a colour-matching exercise. Sits on the same baseline
+   and font size as .catalog-state, which it still carries. */
+.tier-pill {
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success-line);
+  border-radius: 999px;
+  padding: 2px var(--space-3);
+  font-weight: 600;
+}
+
+/* Only ever opened by the Debug button, and scrollable because a report covering fifty
+   files is longer than the panel. Monospace: the report is column-aligned text. */
+.debug-report {
+  margin-top: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.debug-report-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.debug-report-text {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-xs);
+  color: var(--muted-strong);
+  white-space: pre;
 }
 
 .workflow-grid {

@@ -3745,7 +3745,10 @@ function fakeElement() {
     textContent: "", innerHTML: "", hidden: false, disabled: false,
     href: "", value: "", src: "", muted: false,
     style: {}, dataset: {},
-    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    classList: {
+      toggle(name, on) { if (name === "tier-pill") node.pillOn = on; },
+      add() {}, remove() {}, contains() { return false; },
+    },
     addEventListener(type, handler) { (node.handlers[type] ||= []).push(handler); },
     setAttribute() {}, removeAttribute() {},
     append() {}, remove() {}, focus() {}, scrollIntoView() {},
@@ -3773,7 +3776,18 @@ for (const scenario of scenarios) {
     },
     querySelector: (sel) => element(sel),
     getElementById: (id) => element("#" + id),
-    createElement: () => fakeElement(),
+    createElement: () => {
+      // escapeText() sets textContent and reads innerHTML back; that is how app.js
+      // escapes. Mirror it, minus the escaping, or every metric string reads as empty
+      // here and an assertion about panel text would pass on a blank panel.
+      const node = fakeElement();
+      let text = "";
+      Object.defineProperty(node, "textContent", {
+        get: () => text,
+        set: (value) => { text = String(value); node.innerHTML = text; },
+      });
+      return node;
+    },
     addEventListener() {},
   };
 
@@ -3808,13 +3822,23 @@ for (const scenario of scenarios) {
   if (scenario.account) {
     context.renderAccount(scenario.account);
   }
+  if (scenario.status) {
+    context.updatePanel(scenario.status);
+  }
 
+  // classList is a no-op in this fake DOM, so the pill is observed through the toggle
+  // rather than through a class list nothing maintains.
+  const badge = nodes["#tier-badge"];
   results.push({
     name: scenario.name,
+    tierText: badge ? badge.textContent : null,
+    tierPill: badge ? Boolean(badge.pillOn) : null,
+    debugHidden: nodes["#debug-button"] ? nodes["#debug-button"].hidden : null,
     upsellHidden: nodes["#rapidcache-upsell"].hidden,
     hintHidden: nodes["#rapidcache-signin-hint"].hidden,
     videoHidden: video ? video.hidden : null,
     videoSrc: video ? video.src : null,
+    metrics: nodes["#job-metrics"] ? nodes["#job-metrics"].innerHTML : null,
     liveTimers: timers.started.filter((id) => !timers.cleared.includes(id)).length,
   });
 }
@@ -6018,3 +6042,108 @@ def test_the_report_endpoint_answers_as_plain_text(tmp_path, monkeypatch) -> Non
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
     assert "10sorLabs install report" in response.text
+
+
+def test_the_debug_button_follows_the_tier_it_is_gated_to() -> None:
+    """One constant decides this, and it reuses the upsell's own fast-tier condition.
+
+    The two must not drift: a button that appears for someone who cannot be helped by it
+    is worse than no button.
+    """
+    app_js = launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js"
+    rows = run_upsell_harness(
+        [
+            {"name": "fast", "account": account(True, "ok", "fast")},
+            {"name": "standard", "account": account(True, "ok", "standard")},
+        ],
+        app_js,
+    )
+
+    assert rows["fast"]["debugHidden"] is False
+    assert rows["standard"]["debugHidden"] is True
+
+    # And the constant really is the only thing holding it there.
+    source = app_js.read_text(encoding="utf-8")
+    assert "const DEBUG_REPORT_REQUIRES_FAST = true;" in source
+    flipped = source.replace(
+        "const DEBUG_REPORT_REQUIRES_FAST = true;",
+        "const DEBUG_REPORT_REQUIRES_FAST = false;",
+    )
+    with tempfile.TemporaryDirectory() as workspace:
+        # Never written beside the real app.js: launcher/static is served at "/" and ships
+        # to every pod, so a kill between write and unlink would put it in the zip.
+        copy = Path(workspace) / "app.js"
+        copy.write_text(flipped, encoding="utf-8")
+        both = run_upsell_harness(
+            [
+                {"name": "fast", "account": account(True, "ok", "fast")},
+                {"name": "standard", "account": account(True, "ok", "standard")},
+            ],
+            copy,
+        )
+    assert both["fast"]["debugHidden"] is False
+    assert both["standard"]["debugHidden"] is False
+
+
+def test_only_the_fast_tier_gets_the_rapidcache_pill() -> None:
+    """The pill's presence is the signal, so standard keeps its plain text treatment."""
+    rows = run_upsell_harness(
+        [
+            {"name": "fast", "account": account(True, "ok", "fast")},
+            {"name": "standard", "account": account(True, "ok", "standard")},
+            {"name": "checking", "account": account(True, "unavailable", "")},
+        ],
+        launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js",
+    )
+
+    assert rows["fast"]["tierText"] == "RapidCache"
+    assert rows["fast"]["tierPill"] is True
+    assert rows["standard"]["tierText"] == "Standard downloads"
+    assert rows["standard"]["tierPill"] is False
+    assert rows["checking"]["tierPill"] is False
+
+
+def test_the_rate_says_which_number_it_is() -> None:
+    """77.5 MB/s then 1.10 GB/s reads as a wild swing. It is the network, then the disk."""
+    rows = run_upsell_harness(
+        [
+            {
+                "name": "downloading",
+                "status": {
+                    "status": "running",
+                    "stage": "downloading",
+                    "message": "Downloading Qwen Rapid AIO…",
+                    "bytes_per_second": 81_000_000,
+                },
+            },
+            {
+                "name": "placing",
+                "status": {
+                    "status": "running",
+                    "stage": "installing",
+                    "message": "Placing Qwen Rapid AIO… 40%",
+                    "bytes_per_second": 1_180_000_000,
+                },
+            },
+        ],
+        launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js",
+    )
+
+    assert "downloading" in rows["downloading"]["metrics"]
+    assert "saving to disk" in rows["placing"]["metrics"]
+    # The number is still there; the phase is added, not substituted.
+    assert "/s" in rows["downloading"]["metrics"]
+    assert "/s" in rows["placing"]["metrics"]
+
+
+def test_the_debug_report_markup_is_served(tmp_path, monkeypatch) -> None:
+    """Python, not the harness: the fake DOM answers every selector with one element, so
+    a harness assertion about the page's contents would pass on an empty page."""
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    with TestClient(launcher_app.app) as client:
+        page = client.get("/").text
+
+    assert 'id="debug-button"' in page
+    assert 'id="debug-report-text"' in page
+    assert 'id="debug-copy"' in page
+    assert 'id="debug-download"' in page

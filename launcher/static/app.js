@@ -10,6 +10,13 @@
 // so putting the clip back is this one line.
 const RAPIDCACHE_DEMO_URL = "";
 
+// RW's call, and a considered one: the standard template is effectively free, so support
+// is not part of it, while subscribers pay real money and are the more exposed customer.
+// Counter-argument, recorded rather than acted on: /api/diagnostics is unauthenticated
+// anyway, and a standard-tier user with a problem still ends up sending a screenshot.
+// Flip to false to show it to everyone; nothing else changes.
+const DEBUG_REPORT_REQUIRES_FAST = true;
+
 const elements = {
   navLinks: [...document.querySelectorAll("[data-view-target]")],
   views: [...document.querySelectorAll("[data-view]")],
@@ -28,6 +35,11 @@ const elements = {
   cancel: document.querySelector("#cancel-button"),
   restart: document.querySelector("#restart-button"),
   comfy: document.querySelector("#comfy-button"),
+  debugButton: document.querySelector("#debug-button"),
+  debugReport: document.querySelector("#debug-report"),
+  debugReportText: document.querySelector("#debug-report-text"),
+  debugCopy: document.querySelector("#debug-copy"),
+  debugDownload: document.querySelector("#debug-download"),
   modelDraftList: document.querySelector("#model-draft-list"),
   modelQueueList: document.querySelector("#model-queue-list"),
   customQueueState: document.querySelector("#custom-queue-state"),
@@ -211,6 +223,14 @@ function showImmediateError(message) {
   elements.comfy.hidden = true;
 }
 
+function ratePhase(status) {
+  const message = String(status.message || "");
+  if (message.startsWith("Placing")) return "saving to disk";
+  if (status.stage === "verifying") return "checking the file";
+  if (status.stage === "downloading") return "downloading";
+  return "working";
+}
+
 function updatePanel(status) {
   const percent = Math.max(0, Math.min(100, Number(status.percent || 0)));
   const isComplete = status.status === "complete";
@@ -242,9 +262,18 @@ function updatePanel(status) {
     );
   }
   if (status.bytes_per_second > 0) {
+    // The phase, not just the number. Both downloading and placing render one big blue
+    // rate, distinguished only by the verb in the message above, so "1.10 GB/s" straight
+    // after "77.5 MB/s" reads as a wild swing. It is not: one is the pod's internet
+    // connection and the other is its local disk. This has misled the author of this
+    // codebase more than once, so it will certainly mislead a customer.
+    //
+    // Derived from what the panel already carries rather than a new status field. The
+    // placement reports stage "installing" with a "Placing …" message, which is why the
+    // message is consulted and not only the stage.
     metrics.push(
       `<span class="metric-rate">${escapeText(
-        `${formatBytes(status.bytes_per_second)}/s`,
+        `${ratePhase(status)} · ${formatBytes(status.bytes_per_second)}/s`,
       )}</span>`,
     );
   }
@@ -766,12 +795,19 @@ function renderAccount(account) {
   const showTier = service === "ok" && knownTier;
 
   // A label only. It never disables, hides or alters any other control.
+  const isFastTier = showTier && tier === "fast";
   elements.tierBadge.textContent = showTier
-    ? tier === "fast"
-      ? "Fast downloads active"
+    ? isFastTier
+      ? "RapidCache"
       : "Standard downloads"
     : "Checking subscription…";
   elements.tierBadge.hidden = !account.configured || !(showChecking || showTier);
+  // A pill on fast tier only. The pill's presence is the signal, so giving standard one
+  // too - in any colour - would destroy it.
+  elements.tierBadge.classList.toggle("tier-pill", isFastTier);
+
+  // Same condition as the pill and the upsell below, so the three cannot drift apart.
+  elements.debugButton.hidden = DEBUG_REPORT_REQUIRES_FAST && !isFastTier;
 
   // Never advertise a product on a pod that has no way to redeem it, never advertise
   // to someone who already pays, and never advertise when we cannot rule that out.
@@ -907,6 +943,68 @@ elements.cancel.addEventListener("click", async () => {
 });
 
 elements.restart.addEventListener("click", restartComfyUI);
+
+elements.debugButton.addEventListener("click", async () => {
+  elements.debugButton.disabled = true;
+  try {
+    const response = await fetch("/api/diagnostics/report");
+    elements.debugReportText.textContent = await response.text();
+  } catch (error) {
+    elements.debugReportText.textContent = `Could not read the report: ${error}`;
+  }
+  elements.debugReport.hidden = false;
+  elements.debugButton.disabled = false;
+});
+
+// navigator, Blob and URL are all looked up inside the handlers and never at module
+// scope. The test sandbox provides none of them, so a top-level reference would throw on
+// load and take every harness test with it - and navigator.clipboard is also undefined on
+// a plain http:// origin, which is not hypothetical: port-forwarding to
+// http://localhost:3000 is how you would try this locally.
+elements.debugCopy.addEventListener("click", async () => {
+  const text = elements.debugReportText.textContent || "";
+  const clipboard =
+    typeof navigator !== "undefined" && navigator.clipboard
+      ? navigator.clipboard
+      : null;
+  if (clipboard) {
+    try {
+      await clipboard.writeText(text);
+      elements.debugCopy.textContent = "Copied";
+      setTimeout(() => (elements.debugCopy.textContent = "Copy"), 2000);
+      return;
+    } catch (error) {
+      // Falls through to selecting the text, below.
+    }
+  }
+  // No clipboard API, or it refused. Select the report so Ctrl-C still works, which is
+  // the whole job - never throw and leave the button looking broken.
+  if (typeof window !== "undefined" && window.getSelection && document.createRange) {
+    const range = document.createRange();
+    range.selectNodeContents(elements.debugReportText);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  elements.debugCopy.textContent = "Press Ctrl-C";
+  setTimeout(() => (elements.debugCopy.textContent = "Copy"), 4000);
+});
+
+elements.debugDownload.addEventListener("click", () => {
+  const text = elements.debugReportText.textContent || "";
+  if (typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
+    // Nothing to fall back to that is better than what is already on screen.
+    elements.debugDownload.textContent = "Select and copy instead";
+    setTimeout(() => (elements.debugDownload.textContent = "Download"), 4000);
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "10sorlabs-install-report.txt";
+  link.click();
+  URL.revokeObjectURL(url);
+});
 elements.customNodeRestart.addEventListener("click", restartComfyUI);
 
 async function initialise() {

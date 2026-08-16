@@ -86,9 +86,24 @@
             <div id="job-warnings" class="job-warnings" hidden></div>
             <p id="job-error" class="job-error" hidden></p>
 
+            <div id="debug-report" class="debug-report" hidden>
+              <div class="debug-report-actions">
+                <button id="debug-copy" class="button button-ghost" type="button">
+                  Copy
+                </button>
+                <button id="debug-download" class="button button-ghost" type="button">
+                  Download
+                </button>
+              </div>
+              <pre id="debug-report-text" class="debug-report-text"></pre>
+            </div>
+
             <div class="job-actions">
               <button id="cancel-button" class="button button-ghost" type="button">
                 Cancel
+              </button>
+              <button id="debug-button" class="button button-ghost" type="button" hidden>
+                Debug
               </button>
               <button id="restart-button" class="button button-ghost" type="button" hidden>
                 RESTART COMFYUI
