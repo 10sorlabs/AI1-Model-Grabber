@@ -73,7 +73,7 @@ const reduceMotion =
 
 // One list, used by both selectView and initialise. Keeping two copies is what let
 // a new view silently fall through to Workflows.
-const VIEW_NAMES = ["workflows", "custom-models", "custom-nodes", "account"];
+const VIEW_NAMES = ["workflows", "custom-models", "custom-nodes", "account", "docs"];
 
 const runningStates = new Set(["running"]);
 let selectedView = "workflows";
@@ -940,6 +940,23 @@ elements.cancel.addEventListener("click", async () => {
   } finally {
     elements.cancel.disabled = false;
   }
+});
+
+// A screenshot that has not shipped yet must leave nothing behind, not a broken image
+// icon in the middle of the help page. Same approach as the RapidCache promo video,
+// which hides itself the same way when its source will not load.
+//
+// Every lookup is guarded: the test harness's fake elements have no closest() and no
+// parentElement, and an unguarded call here would throw during load and take every
+// harness test with it.
+document.querySelectorAll(".docs-figure img").forEach((image) => {
+  image.addEventListener("error", () => {
+    const figure =
+      (typeof image.closest === "function" && image.closest("figure")) ||
+      image.parentElement ||
+      null;
+    if (figure) figure.hidden = true;
+  });
 });
 
 elements.restart.addEventListener("click", restartComfyUI);

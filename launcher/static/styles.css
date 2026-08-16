@@ -471,6 +471,119 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+/* The help page. Wider measure than a form view but still capped: this is prose, and
+   prose at the full shell width is unreadable. */
+.docs-body {
+  max-width: 62ch;
+  color: var(--muted-strong);
+  font-size: var(--text-md);
+  line-height: 1.65;
+}
+
+.docs-body h2 {
+  margin: var(--space-6) 0 var(--space-3);
+  color: var(--text);
+  font-size: var(--text-lg, 1rem);
+}
+
+.docs-body h2:first-child {
+  margin-top: 0;
+}
+
+.docs-body p {
+  margin: 0 0 var(--space-3);
+}
+
+.docs-body strong {
+  color: var(--text);
+}
+
+.docs-body code {
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-sm);
+}
+
+.docs-list {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-4);
+}
+
+.docs-list li {
+  margin-bottom: var(--space-2);
+}
+
+/* The two-up comparison the page is built around, and the four-up speed row. Wraps
+   rather than scrolls: a comparison you have to scroll is not a comparison. */
+.docs-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+.docs-figures > .docs-figure {
+  flex: 1 1 240px;
+}
+
+.docs-figures-row > .docs-figure {
+  flex: 1 1 140px;
+}
+
+.docs-figure {
+  margin: 0 0 var(--space-4);
+}
+
+.docs-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.docs-figure figcaption {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* Tables carry the numbers that do the arguing, so they get a surface of their own. */
+.docs-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 var(--space-4);
+}
+
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.docs-table th,
+.docs-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.docs-table th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The one line somebody who stops reading halfway should still leave with. */
+.docs-callout {
+  padding: var(--space-3);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 /* The pill is the signal that RapidCache is on. Standard tier keeps the plain
    .catalog-state treatment on purpose: a second pill in another colour would turn a
    presence-or-absence signal into a colour-matching exercise. Sits on the same baseline

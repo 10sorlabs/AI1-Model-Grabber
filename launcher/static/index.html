@@ -37,6 +37,12 @@
           <button class="sidebar-link" type="button" data-view-target="account">
             RapidCache
           </button>
+          <!-- Label only, same as the RapidCache tab above. The view id is "docs" and
+               that is what VIEW_NAMES and data-view key off. "Help" is the word somebody
+               with a slow install actually looks for. -->
+          <button class="sidebar-link" type="button" data-view-target="docs">
+            Help
+          </button>
         </nav>
       </aside>
 
@@ -271,6 +277,344 @@
               Already subscribed? Sign in above.
             </p>
           </section>
+        </section>
+
+        <!-- Inline, never fetched. Three reasons, and the first is fatal to the
+             alternative: the JS test harness stubs fetch() as a rejected promise, so a
+             fetched docs view would render empty under test while every assertion about
+             it appeared to pass. The other four views are inline too, and static content
+             that ships with the page cannot fail to load.
+
+             Images live under launcher/static/docs/. bootstrap.py pulls a GitHub zipball
+             of launcher/ at every pod boot, so a wording fix here reaches every existing
+             pod on its next start with no image rebuild. That is the cheapest
+             documentation channel this product has.
+
+             House style for this section only: no em dashes. This is meant to sound like
+             a person explaining something, and an em dash reads as written rather than
+             spoken. Code comments keep app.py's spaced-hyphen convention. -->
+        <section id="view-docs" class="app-view docs" data-view="docs" hidden>
+          <header class="view-header">
+            <div>
+              <h1>Help</h1>
+              <p class="view-subtitle">
+                What RapidCache does, and what your download speed is telling you.
+              </p>
+            </div>
+          </header>
+
+          <article class="docs-body">
+            <h2>What RapidCache is</h2>
+            <p>
+              Think of your pod's internet connection as a water pipe. Everything you
+              download comes through it.
+            </p>
+            <p>
+              Normally, model files come from Hugging Face, and Hugging Face lets your pod
+              open <strong>one tap</strong> on that pipe. That is their rule, not our
+              choice. Ask for more and they refuse.
+            </p>
+            <p>
+              RapidCache keeps the same files, identical files with identical checksums, on
+              storage that lets you open <strong>sixteen taps at once</strong>.
+            </p>
+            <p>
+              <strong>Why that matters when things are busy.</strong> Your pod shares its
+              machine, and its pipe, with other people. When somebody else starts a big
+              download, the pressure drops and every tap gives less water. That is the part
+              nobody controls. Not you, not us, not RunPod.
+            </p>
+            <p>
+              But sixteen weak taps still fill the bucket about sixteen times faster than
+              one weak tap. So when the pipe is squeezed, RapidCache is not just nice to
+              have. It is the difference between an install that finishes and one you give
+              up on.
+            </p>
+            <p>
+              Two pods, both busy, downloading the same 11.46 GB file at the same moment:
+            </p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <thead>
+                  <tr><th></th><th>taps</th><th>speed</th><th>that one file</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>RapidCache</strong></td><td>16</td>
+                    <td><strong>97.2 MB/s</strong></td><td>about 2 minutes</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Standard</strong></td><td>1</td>
+                    <td><strong>6.2 MB/s</strong></td><td>about 31 minutes</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h2>What a pod actually is</h2>
+            <p>
+              When you rent a pod, you are renting a GPU on a shared server. That server is
+              a real machine in a data centre, and it is not yours. Other people rent pods
+              on the same machine at the same time as you.
+            </p>
+            <p>
+              Everyone on that server shares one internet connection and the same storage
+              hardware. What you are guaranteed is the GPU. How much of the internet
+              connection is free at any given moment depends on what your neighbours are
+              doing with their pods. You cannot see them, and neither can we.
+            </p>
+            <p>
+              So on RunPod you always depend a little on other people. If somebody on your
+              server starts pulling a huge dataset, everyone else on that server gets less.
+              When they finish, it comes back. Nobody is doing anything wrong. That is
+              simply how shared hosting works, and it is the same on every provider of this
+              kind.
+            </p>
+            <p>
+              A good pod and a bad pod are not different products. They are the same pod on
+              a quiet server or a busy one, and it can change from one to the other in
+              minutes. We have watched a single file go from 306 MB/s down to 49, then back
+              up to 233, with nothing changing at either end.
+            </p>
+            <p>
+              <strong>This has nothing to do with RapidCache.</strong> It applies to every
+              download on every pod, and it did so long before RapidCache existed.
+            </p>
+
+            <h2>Why is my download only 80 MB/s?</h2>
+            <div class="docs-figures">
+              <figure class="docs-figure">
+                <img src="docs/speed-fast-97.png" alt="A pod signed in to RapidCache downloading at 97.2 MB/s" />
+                <figcaption>Signed in to RapidCache: 97.2 MB/s</figcaption>
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/speed-standard-6.png" alt="A standard pod downloading the same file at 6.2 MB/s" />
+                <figcaption>Standard, same file, same moment: 6.2 MB/s</figcaption>
+              </figure>
+            </div>
+            <p><strong>That number is your pod, not the service.</strong></p>
+            <p>
+              Above are two pods downloading the same 11.46 GB file at the same time. Both
+              were busy. One was signed in to RapidCache, one was not. One finished that
+              file in about two minutes. The other needed about thirty one.
+            </p>
+            <p>
+              So 97 MB/s is not RapidCache being slow. It is RapidCache doing its job on a
+              machine that only had about 6 MB/s to give a single connection.
+            </p>
+            <p>
+              <strong>What "the pipe gets squeezed" actually means.</strong> Downloads do
+              not slow down because something broke. Every connection is still open and
+              still working. There is simply less room in the pipe, so each one carries
+              less. That is why nothing shows an error: the numbers just get smaller, and
+              then get bigger again when whoever was busy stops.
+            </p>
+            <p>
+              Sixteen slow lanes still beat one slow lane by about sixteen times. That is
+              why the gap holds on a busy machine as well as a quiet one. RapidCache gives
+              you a multiple of whatever your pod has, not a fixed speed.
+            </p>
+            <p class="docs-callout">
+              On a busy server RapidCache will not feel as fast as it does on a quiet one.
+              Nothing can. What it will do is take everything that is available, instead of
+              the sixteenth of it a single connection would get.
+            </p>
+
+            <h2>What good and bad look like</h2>
+            <div class="docs-figures docs-figures-row">
+              <figure class="docs-figure">
+                <img src="docs/speed-range-1.png" alt="An install reading 88.8 MB/s" />
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/speed-range-2.png" alt="An install reading 475.5 MB/s" />
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/speed-range-3.png" alt="An install reading 51.9 MB/s" />
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/speed-range-4.png" alt="An install reading 55.6 MB/s" />
+              </figure>
+            </div>
+            <p>Those four readings are all real installs. From our own measurements:</p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <tbody>
+                  <tr><td>healthy pod</td><td>330 to 950 MB/s</td></tr>
+                  <tr><td>busy pod</td><td>150 to 250 MB/s</td></tr>
+                  <tr><td>badly congested</td><td>under 150 MB/s</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              We have watched <strong>one file move 306 to 49 to 233 MB/s in a few
+              minutes</strong>, with nothing changing. One reading tells you nothing.
+            </p>
+
+            <h2>When to wait, and when to start a new pod</h2>
+            <ul class="docs-list">
+              <li>
+                <strong>A slow reading in the first minute or two: ignore it.</strong>
+                Connections take a few seconds to reach full speed. A 300 MB file finishes
+                before they get there, so small files always show a lower number than big
+                ones. That is normal on every pod.
+              </li>
+              <li>
+                <strong>Still under 150 MB/s after several minutes, with no sign of
+                recovery:</strong> you are on a busy machine. Stop the pod and deploy a new
+                one. You will land on a different machine.
+              </li>
+              <li>
+                <strong>Do not restart immediately.</strong> You will usually lose more time
+                redeploying than you would have lost waiting. We have seen pods recover
+                fivefold on their own.
+              </li>
+              <li>
+                <strong>Not sure?</strong> Press <strong>Debug</strong>. It tells you what
+                your pod actually did.
+              </li>
+            </ul>
+
+            <h2>What the numbers mean</h2>
+            <div class="docs-figures">
+              <figure class="docs-figure">
+                <img src="docs/phase-downloading.png" alt="The panel while a file is downloading" />
+                <figcaption>Downloading</figcaption>
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/phase-placing.png" alt="The panel while a file is being saved to disk" />
+                <figcaption>Saving to disk</figcaption>
+              </figure>
+            </div>
+            <p>An install does two different things, and both show a speed:</p>
+            <ul class="docs-list">
+              <li>
+                <strong>Downloading:</strong> pulling the file from the internet. This is
+                where your pod's connection matters.
+              </li>
+              <li>
+                <strong>Saving to disk:</strong> copying the finished file onto your pod's
+                storage. No internet is involved, so this number is usually much higher and
+                means something completely different.
+              </li>
+            </ul>
+            <p>
+              Seeing 77 MB/s and then 1.10 GB/s a moment later is normal. They are not the
+              same thing.
+            </p>
+
+            <h2>Setting up your pod</h2>
+            <figure class="docs-figure">
+              <img src="docs/runpod-storage.png" alt="RunPod's storage options: container disk, network volume and volume disk" />
+            </figure>
+            <p>Two settings affect how fast an install is.</p>
+            <p>
+              <strong>Container disk.</strong> Temporary space, wiped when the pod stops.
+              Downloads are staged here first. The largest single model is
+              <strong>28.43 GB</strong>, so give it <strong>100 GB or more</strong>. Our
+              template ships 200 GB.
+            </p>
+            <p>
+              <strong>Storage for your models.</strong> Where the models actually live.
+              RunPod offers two:
+            </p>
+            <div class="docs-table-wrap">
+              <table class="docs-table">
+                <tbody>
+                  <tr>
+                    <td><strong>Volume disk</strong></td>
+                    <td>local to your pod</td>
+                    <td>
+                      <strong>Fastest.</strong> Deleted when the pod is terminated.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong>Network volume</strong></td>
+                    <td>shared storage</td>
+                    <td>
+                      Survives termination, can be used by several pods and costs less. But
+                      writing to it is about ten times slower.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              Choose <strong>Volume disk</strong> for the quickest setup. Choose
+              <strong>Network volume</strong> if you want your models to outlive the pod and
+              can accept a slower install. Neither is wrong.
+            </p>
+            <p>
+              <strong>Size.</strong> Dataset Generator is 44.6 GB and MiniMax H3 is 63.4 GB,
+              plus ComfyUI itself. <strong>200 GB</strong> is comfortable for two or three
+              workflows. 100 GB is tight.
+            </p>
+            <p>
+              <strong>Environment variables.</strong> RunPod adds
+              <code>PUBLIC_KEY</code> and <code>JUPYTER_PASSWORD</code> to every pod
+              automatically. Those are RunPod's own, for SSH and Jupyter. You do not need to
+              add anything for RapidCache. Sign in on the RapidCache tab instead.
+            </p>
+
+            <h2>Signing in</h2>
+            <div class="docs-figures">
+              <figure class="docs-figure">
+                <img src="docs/account-signed-out.png" alt="The RapidCache tab with the sign-in form" />
+                <figcaption>Before</figcaption>
+              </figure>
+              <figure class="docs-figure">
+                <img src="docs/account-signed-in.png" alt="The RapidCache tab signed in, with the green badge showing" />
+                <figcaption>After</figcaption>
+              </figure>
+            </div>
+            <p>
+              Open the <strong>RapidCache</strong> tab, enter the email and password from
+              your subscription, and press Sign in. When it works you will see the green
+              <strong>RapidCache</strong> badge at the top of the workflow list. That is the
+              only thing you need to check.
+            </p>
+
+            <h2>What success looks like</h2>
+            <figure class="docs-figure">
+              <img src="docs/install-complete.png" alt="A finished install showing 100 percent and Workflow ready" />
+            </figure>
+            <p>
+              100%, and <strong>Workflow ready</strong>. If it says a number of skipped
+              items, open the warning. The install finished, and one optional step did not.
+              It is usually safe to continue.
+            </p>
+
+            <h2>The Debug button</h2>
+            <figure class="docs-figure">
+              <img src="docs/debug-button.png" alt="The Debug button and a sample install report" />
+            </figure>
+            <p>
+              If something looks wrong, press <strong>Debug</strong>. It writes a report of
+              what your pod actually did: how fast each file downloaded, how long each step
+              took, what kind of storage you are on, and anything that failed.
+            </p>
+            <p>
+              It contains no passwords, no links and no file locations, so it is safe to
+              paste anywhere. Sending it is the fastest way to get a real answer instead of
+              a guess.
+            </p>
+
+            <h2>What we promise</h2>
+            <p>
+              RapidCache cannot make your server less busy. Nobody can. Not us, not RunPod,
+              not you.
+            </p>
+            <p>
+              What it does is make sure you are always getting the most your pod is able to
+              give. One tap on a squeezed pipe is a trickle. Sixteen taps on the same pipe
+              is still a stream. Whatever your pod has available at that moment, RapidCache
+              takes as much of it as the connection allows.
+            </p>
+            <p>
+              That is the promise. Not a fixed speed, because nobody can honestly promise a
+              speed on shared hardware. The best speed your pod can give you, every time you
+              install.
+            </p>
+          </article>
         </section>
       </main>
     </div>

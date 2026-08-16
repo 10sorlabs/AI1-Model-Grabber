@@ -6147,3 +6147,90 @@ def test_the_debug_report_markup_is_served(tmp_path, monkeypatch) -> None:
     assert 'id="debug-report-text"' in page
     assert 'id="debug-copy"' in page
     assert 'id="debug-download"' in page
+
+
+def test_the_help_page_is_served_as_part_of_the_page(tmp_path, monkeypatch) -> None:
+    """Python, not the harness. The fake DOM answers every selector with a single element
+    claiming to be "workflows", so a harness assertion about the sidebar would pass on a
+    page with one entry, or none. A vacuous green test is worse than no test.
+
+    Inline rather than fetched, for the same reason plus one worse: the harness stubs
+    fetch as a rejected promise, so a fetched docs view would render empty under test
+    while every assertion about it appeared to pass.
+    """
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    with TestClient(launcher_app.app) as client:
+        page = client.get("/").text
+
+    assert len(re.findall(r'data-view-target="([^"]+)"', page)) == 5
+    assert 'data-view-target="docs"' in page
+    assert 'id="view-docs"' in page
+    # The content really is in the page, not a placeholder waiting on a fetch.
+    assert "Think of your pod's internet connection as a water pipe" in page
+    assert "What a pod actually is" in page
+    assert "The best speed your pod can give you" in page
+
+
+def test_the_help_page_speaks_in_sentences_not_dashes() -> None:
+    """An em dash reads as written rather than spoken, and this page is a person talking.
+
+    Rewriting rather than substituting was the point: a comma in place of every dash makes
+    run-ons that are worse than what you started with.
+    """
+    html = static_file("index.html")
+    docs = html[html.index('id="view-docs"') : html.index("</article>")]
+
+    offenders = [
+        line.strip()
+        for line in docs.splitlines()
+        # "-->" and "<!--" are markup, not copy.
+        if ("—" in line or "–" in line)
+        or ("--" in line and "<!--" not in line and "-->" not in line)
+    ]
+    assert offenders == [], offenders
+
+
+def test_every_help_page_image_resolves_or_disappears_by_itself() -> None:
+    """None of the screenshots have shipped yet, and a broken image icon in the middle of
+    a help page is worse than no picture at all."""
+    html = static_file("index.html")
+    docs_dir = launcher_app.STATIC_DIR / "docs"
+    sources = re.findall(r'<img src="(docs/[^"]+)"', html)
+
+    assert sources, "the help page references no images at all"
+    for source in sources:
+        target = launcher_app.STATIC_DIR / source
+        if target.is_file():
+            continue
+        # Not shipped yet, so it must be inside a figure the error handler can hide.
+        block = html[: html.index(source)]
+        assert block.rstrip().endswith(
+            '<img src="'
+        ) or 'class="docs-figure"' in block[-400:], (
+            f"{source} is missing and is not inside a .docs-figure"
+        )
+
+    js = static_file("app.js")
+    assert '.docs-figure img' in js
+    assert 'addEventListener("error"' in js
+    assert "figure.hidden = true" in js
+
+
+def test_docs_is_a_real_view_that_the_switcher_accepts() -> None:
+    """The harness, because allowedViews in selectView is the logic under test here."""
+    rows = run_upsell_harness(
+        [
+            {"name": "docs", "hash": "#docs"},
+            {"name": "nonsense", "hash": "#not-a-view"},
+        ],
+        launcher_app.SOURCE_ROOT / "launcher" / "static" / "app.js",
+    )
+
+    # Both scenarios load app.js, which calls selectView through initialise(). A view
+    # name it rejects falls back to workflows, and an unhandled throw would fail the run.
+    assert rows["docs"]["name"] == "docs"
+    assert rows["nonsense"]["name"] == "nonsense"
+
+    js = static_file("app.js")
+    declared = re.search(r"const VIEW_NAMES\s*=\s*\[([^\]]*)\]", js).group(1)
+    assert '"docs"' in declared
