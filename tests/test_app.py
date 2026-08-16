@@ -5478,3 +5478,235 @@ def test_an_update_is_not_attributed_to_the_next_workflow(tmp_path, monkeypatch)
         return store.export()["comfyui_update"]
 
     assert asyncio.run(install_then_start_another()) is None
+
+
+def test_cancel_stops_a_subprocess_that_is_still_running(monkeypatch) -> None:
+    """Cancel was immediate everywhere except the two places it is pressed.
+
+    aria2c is raced and terminated, copy_into_place checks per chunk - but every git
+    clone and every pip install ignored the button, which on a real pod is
+    ComfyUI_FaceAnalysis at 136s compiling dlib.
+    """
+    spawned = spawned_processes(monkeypatch)
+    controller = launcher_app.JobController()
+
+    async def runner() -> None:
+        async def press_cancel() -> None:
+            await asyncio.sleep(0.2)
+            controller.cancel_event.set()
+
+        pressing = asyncio.create_task(press_cancel())
+        with pytest.raises(launcher_app.InstallCancelled):
+            # No timeout on purpose: cancel has to work on its own, not as a side effect
+            # of a bound expiring.
+            await controller._run_process(
+                sys.executable, "-c", "import time; time.sleep(30)"
+            )
+        await pressing
+
+    asyncio.run(runner())
+
+    assert len(spawned) == 1
+    # The process itself answering, not a sleep long enough to look convincing here.
+    assert spawned[0].returncode is not None
+
+
+def test_a_cancel_and_a_timeout_stay_distinguishable() -> None:
+    """_install_custom_nodes re-raises one and turns the other into a skipped node."""
+    assert not issubclass(launcher_app.InstallCancelled, RuntimeError)
+
+    async def runner() -> None:
+        cancelled = launcher_app.JobController()
+        # Already set before the call, which is the state a cancel pressed during the
+        # previous command leaves behind.
+        cancelled.cancel_event.set()
+        with pytest.raises(launcher_app.InstallCancelled):
+            await cancelled._run_process(
+                sys.executable, "-c", "import time; time.sleep(30)", timeout=600
+            )
+
+        timed_out = launcher_app.JobController()
+        with pytest.raises(RuntimeError) as failure:
+            await timed_out._run_process(
+                sys.executable,
+                "-c",
+                "import sys, time; print('Collecting torch'); "
+                "sys.stdout.flush(); time.sleep(30)",
+                timeout=0.5,
+            )
+        assert not isinstance(failure.value, launcher_app.InstallCancelled)
+        assert "Collecting torch" in str(failure.value)
+        assert "did not finish within" in str(failure.value)
+
+    asyncio.run(runner())
+
+
+def test_no_canceller_task_survives_a_finished_subprocess() -> None:
+    """Eleven of these run per install; a leaked Event.wait() each would accumulate."""
+    controller = launcher_app.JobController()
+
+    async def runner() -> int:
+        before = len(asyncio.all_tasks())
+        await controller._run_process(sys.executable, "-c", "print('done')")
+        await controller._run_process(sys.executable, "-c", "print('done')", timeout=30)
+        return len(asyncio.all_tasks()) - before
+
+    assert asyncio.run(runner()) == 0
+
+
+def node_clone_harness(tmp_path, monkeypatch, failure, on_word="clone"):
+    """Drive _install_custom_node with a git that dies part way through one command.
+
+    Returns (controller, node, destination). The stub creates the directory before it
+    raises, which is what git leaves behind when it is signalled mid-clone.
+    """
+    custom_nodes = tmp_path / "custom_nodes"
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+    controller = launcher_app.JobController()
+    destination = custom_nodes / "ComfyUI-KJNodes"
+    repo = "https://github.com/kijai/ComfyUI-KJNodes"
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if on_word in normalized:
+            destination.mkdir(parents=True, exist_ok=True)
+            # Far enough along to exist, never far enough to answer for itself.
+            (destination / ".git").mkdir(exist_ok=True)
+            raise failure
+        if "remote" in normalized and "get-url" in normalized:
+            return 0, repo + "\n"
+        if "cat-file" in normalized:
+            return 1, "missing"
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+    node = {
+        "name": "ComfyUI-KJNodes",
+        "repo": repo,
+        "ref": "a" * 40,
+        "install_requirements": True,
+    }
+    return controller, node, destination
+
+
+def test_a_cancelled_clone_does_not_poison_the_folder(tmp_path, monkeypatch) -> None:
+    """Otherwise the next attempt finds a directory it cannot identify, for good.
+
+    destination.exists() is true, so the clone is skipped, `git remote get-url origin`
+    runs against a .git that never got that far, and the node fails with "not the expected
+    Git repository" until somebody deletes it by hand. A cancel must not create a fault
+    that a failure does not.
+    """
+    controller, node, destination = node_clone_harness(
+        tmp_path, monkeypatch, launcher_app.InstallCancelled()
+    )
+
+    with pytest.raises(launcher_app.InstallCancelled):
+        asyncio.run(controller._install_custom_node(node))
+
+    assert not destination.exists()
+
+
+def test_a_timed_out_clone_does_not_poison_the_folder(tmp_path, monkeypatch) -> None:
+    """The same hole, and it was open before cancel existed.
+
+    The cleanup sits under `if returncode:`, which a raise never reaches - so a clone that
+    hit its 600s bound has been leaving the poisoned directory since the bound was added.
+    """
+    controller, node, destination = node_clone_harness(
+        tmp_path,
+        monkeypatch,
+        RuntimeError("git did not finish within 600s and was stopped after 600s."),
+    )
+
+    with pytest.raises(RuntimeError, match="did not finish within"):
+        asyncio.run(controller._install_custom_node(node))
+
+    assert not destination.exists()
+
+
+def test_a_cancelled_fetch_or_checkout_keeps_the_repository(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A clone that completed leaves a valid repository; the next run recovers on its own.
+
+    Deleting it here would throw away a good checkout to no purpose.
+    """
+    for word in ("fetch", "checkout"):
+        controller, node, destination = node_clone_harness(
+            tmp_path / word, monkeypatch, launcher_app.InstallCancelled(), on_word=word
+        )
+        # Already cloned, so _install_custom_node takes the existing-folder branch.
+        destination.mkdir(parents=True, exist_ok=True)
+
+        with pytest.raises(launcher_app.InstallCancelled):
+            asyncio.run(controller._install_custom_node(node))
+
+        assert destination.exists(), f"a cancelled {word} deleted a valid repository"
+
+
+def test_a_cancel_inside_a_node_install_is_not_swallowed(tmp_path, monkeypatch) -> None:
+    """The per-node handler turns failures into warnings and carries on. Not this one."""
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+
+    async def cancelling_install(node, *, on_step=None) -> None:
+        on_step("installing dependencies")
+        raise launcher_app.InstallCancelled()
+
+    monkeypatch.setattr(controller, "_install_custom_node", cancelling_install)
+
+    async def runner() -> int:
+        before = len(asyncio.all_tasks())
+        with pytest.raises(launcher_app.InstallCancelled):
+            await controller._install_custom_nodes(
+                [
+                    {"name": "ComfyUI-KJNodes", "repo": "https://github.com/a/b", "ref": "a" * 40},
+                    {"name": "Never-Reached", "repo": "https://github.com/c/d", "ref": "b" * 40},
+                ]
+            )
+        return len(asyncio.all_tasks()) - before
+
+    # The ticker is cancelled on the way out, in the same finally as every other exit.
+    assert asyncio.run(runner()) == 0
+    assert controller.state.warnings == [], "a cancel became a skipped-node warning"
+    assert controller.state.current_file == "ComfyUI-KJNodes"
+
+
+def test_a_cancel_during_the_comfyui_probes_is_not_swallowed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The probes catch RuntimeError and nothing wider, precisely so this cannot happen.
+
+    A bare except Exception there would return "" and let the install carry on as though
+    nobody had pressed anything.
+    """
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    comfy_dir = tmp_path / "ComfyUI"
+    (comfy_dir / ".git").mkdir(parents=True)
+    (comfy_dir / "requirements.txt").write_text("torch\n", encoding="utf-8")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    controller = launcher_app.JobController()
+
+    async def cancelled(*_command, **_bounds) -> tuple[int, str]:
+        raise launcher_app.InstallCancelled()
+
+    monkeypatch.setattr(controller, "_run_process", cancelled)
+
+    async def runner() -> int:
+        before = len(asyncio.all_tasks())
+        with pytest.raises(launcher_app.InstallCancelled):
+            await controller._update_comfyui()
+        return len(asyncio.all_tasks()) - before
+
+    assert asyncio.run(runner()) == 0
+
+    # str(InstallCancelled()) is "", which is falsy - so without the class-name fallback
+    # this record would read back as a clean, unskipped success.
+    record = store.export()["comfyui_update"]
+    assert record["error"] == "InstallCancelled"
+    assert record["skipped"] is False

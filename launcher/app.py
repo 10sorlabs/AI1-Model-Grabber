@@ -1581,7 +1581,13 @@ class CustomNodeController:
     async def _run_process(
         self, *command: str | Path, timeout: float | None = None
     ) -> tuple[int, str]:
-        """Same contract as JobController._run_process, deliberately duplicated.
+        """Bounded like JobController._run_process, but it does not watch a cancel event.
+
+        That is the one place the two contracts differ. The workflow installer's copy
+        races self.cancel_event, because that panel has a Cancel button and a git or pip
+        step there can run for minutes. These queue items have no such button in the UI,
+        so cancellation here would be a feature rather than a fix, and this is a stability
+        release.
 
         This tab reaches the same git and the same pip as the workflow installer, so it
         hung the same way: a user installing ComfyUI-Impact-Pack from the Custom nodes
@@ -1925,7 +1931,10 @@ class JobController:
     async def cancel(self) -> dict[str, Any]:
         if self.task and not self.task.done():
             self.cancel_event.set()
-            self.update(message="Cancelling after the current chunk…")
+            # Chunks were the only interruptible unit when this was written. A git or pip
+            # step can be stopped outright now, so the message no longer promises a wait
+            # that does not happen.
+            self.update(message="Cancelling…")
         return self.state.export()
 
     def check_cancelled(self) -> None:
@@ -2261,7 +2270,10 @@ class JobController:
             if returncode:
                 raise RuntimeError(f"ComfyUI requirements failed: {output[-500:]}")
         except Exception as exc:
-            error = str(exc)
+            # `or` the class name, because str(InstallCancelled()) is "" - and an empty
+            # string is falsy, so the recorder would store error: null and this cancelled
+            # update would read back as a clean, unskipped success.
+            error = str(exc) or exc.__class__.__name__
             raise
         finally:
             # Ticker first, then the record, then the message. A tick that fired after the
@@ -2926,6 +2938,16 @@ class JobController:
                     message=f"Verifying {name}…",
                     bytes_per_second=0,
                 )
+                # A known gap, not an oversight: this runs to completion even after
+                # Cancel. file_sha256 is on a to_thread worker and _hash_progress only
+                # reports - it never raises - so nothing interrupts it the way
+                # copy_into_place's check_cancelled interrupts a placement.
+                #
+                # Left alone deliberately. It is a rare path now that verify: false skips
+                # the digest for files the RapidCache server mirrored itself, and making
+                # it interruptible means raising from inside a worker-thread callback -
+                # the copy_into_place pattern, which is fine, but it is a change with its
+                # own tests and this release is about stability.
                 digest = await asyncio.to_thread(
                     file_sha256, partial, self._hash_progress(name, expected_size)
                 )
@@ -3227,15 +3249,33 @@ class JobController:
     ) -> tuple[int, str]:
         """Run a command to completion; return (exit code, stdout+stderr).
 
-        timeout is in seconds and defaults to None, so adding it changes no existing
+        Races three things: the process finishing, the timeout, and the user pressing
+        Cancel. timeout is in seconds and defaults to None, so it changes no existing
         caller's meaning - only the ones that opt in.
 
-        Expiry raises rather than returning a synthetic non-zero exit code. Every caller
-        builds its failure message from the output tail (f"…: {output[-500:]}"), so a
-        synthetic code would hand them an empty tail and print a failure with nothing in
-        it - for the one failure mode that most needs explaining. A customer's pod sat on
-        one line for 46 minutes because nothing here could time out; the message this
+        Cancel had to come here because it was already immediate everywhere else and only
+        looked immediate here. aria2c is raced and terminated, copy_into_place checks per
+        chunk - but every git clone and every pip install ignored the button, which on a
+        real pod is ComfyUI_FaceAnalysis at 136s compiling dlib and the ComfyUI
+        requirements at about two minutes. Those are exactly the moments someone presses
+        it. A Cancel that sometimes works is worse than one that always takes ten seconds,
+        because the user cannot tell which kind they are looking at.
+
+        Expiry raises RuntimeError rather than returning a synthetic non-zero exit code.
+        Every caller builds its failure message from the output tail (f"…: {output[-500:]}"),
+        so a synthetic code would hand them an empty tail and print a failure with nothing
+        in it - for the one failure mode that most needs explaining. A customer's pod sat
+        on one line for 46 minutes because nothing here could time out; the message this
         raises is what that pod should have said instead.
+
+        Cancel raises InstallCancelled, which is not a RuntimeError, so the two stay
+        distinguishable all the way up: _install_custom_nodes re-raises a cancel and turns
+        everything else into a skipped-node warning.
+
+        One thing this does not cover, and it is not a regression: if the whole install
+        task is cancelled from outside while this is waiting, the waiter is left pending
+        and the child is never signalled. The wait_for(shield(...)) this replaced had the
+        same property. The finally below cleans up the canceller and nothing more.
         """
         process = await asyncio.create_subprocess_exec(
             *(str(part) for part in command),
@@ -3244,29 +3284,51 @@ class JobController:
         )
         executable = Path(str(command[0])).name
         started = time.monotonic()
-        # Shielded, so a timeout below cancels this await without cancelling the
-        # communicate() underneath it: the same waiter still has to be awaited after the
-        # signal, or the transport is never closed. Same shape as the aria2c cancel path.
         waiter = asyncio.ensure_future(process.communicate())
+        canceller = asyncio.ensure_future(self.cancel_event.wait())
         try:
-            output, _ = await asyncio.wait_for(asyncio.shield(waiter), timeout)
-        except asyncio.TimeoutError:
-            elapsed = time.monotonic() - started
-            process.terminate()
-            try:
-                output, _ = await asyncio.wait_for(asyncio.shield(waiter), 5)
-            except asyncio.TimeoutError:
-                process.kill()
-                output, _ = await waiter
-            # Whatever it managed to print before it stopped. A hung pip has usually said
-            # something useful ("Collecting torch…"), and this is the only place it can
-            # still be read: the caller has no output to build a tail from.
-            tail = output.decode(errors="replace")[-500:].strip() if output else ""
-            raise RuntimeError(
-                f"{executable} did not finish within {timeout:.0f}s and was stopped "
-                f"after {elapsed:.0f}s. {tail}".strip()
+            # asyncio.wait returns rather than raising when its timeout expires, and
+            # leaves whatever it did not see finish alone - so this first await needs no
+            # shield. The five-second grace below keeps one, because wait_for does cancel
+            # what it is given, and the same waiter still has to be awaited after the
+            # signal or the transport is never closed.
+            await asyncio.wait(
+                {waiter, canceller},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
             )
-        return process.returncode or 0, output.decode(errors="replace")
+            if not waiter.done():
+                # Both at once means Cancel was pressed on a command already past its
+                # bound. Cancel is the more specific event, so it wins and the user is
+                # told what they asked for rather than what expired.
+                cancelled = canceller.done()
+                process.terminate()
+                try:
+                    output, _ = await asyncio.wait_for(asyncio.shield(waiter), 5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    output, _ = await waiter
+                if cancelled:
+                    raise InstallCancelled()
+                # Whatever it managed to print before it stopped. A hung pip has usually
+                # said something useful ("Collecting torch…"), and this is the only place
+                # it can still be read: the caller has no output to build a tail from.
+                tail = output.decode(errors="replace")[-500:].strip() if output else ""
+                # Unreachable with no timeout - asyncio.wait only returns early when a
+                # future completes, so an unfinished waiter means the canceller fired and
+                # the raise above already happened. Guarded anyway: that is an argument,
+                # not a construction, and f"{None:.0f}" is a TypeError.
+                bound = f"{timeout:.0f}s" if timeout is not None else "its bound"
+                raise RuntimeError(
+                    f"{executable} did not finish within {bound} and was stopped "
+                    f"after {time.monotonic() - started:.0f}s. {tail}".strip()
+                )
+
+            output, _ = waiter.result()
+            return process.returncode or 0, output.decode(errors="replace")
+        finally:
+            canceller.cancel()
+            await asyncio.gather(canceller, return_exceptions=True)
 
     async def _install_custom_node(
         self,
@@ -3314,14 +3376,32 @@ class JobController:
         if not destination.exists():
             step("cloning")
             clone_started = time.monotonic()
-            returncode, output = await self._run_process(
-                "git",
-                "clone",
-                "--filter=blob:none",
-                repo,
-                destination,
-                timeout=600,
-            )
+            try:
+                returncode, output = await self._run_process(
+                    "git",
+                    "clone",
+                    "--filter=blob:none",
+                    repo,
+                    destination,
+                    timeout=600,
+                )
+            except Exception:
+                # Any exit that is not a clean return leaves a partial directory here, and
+                # the cleanup below sits under `if returncode:` - which a raise never
+                # reaches. A cancel is one way in; the 600s timeout is another, and that
+                # one has been broken since the bound was added.
+                #
+                # What the partial directory costs: destination.exists() is true on the
+                # next attempt, so the clone is skipped, `git remote get-url origin` runs
+                # against a .git that never got that far, and the node fails with "The
+                # existing {name} folder is not the expected Git repository" - permanently,
+                # until somebody deletes it by hand. A cancel must not create a fault that
+                # a failure does not.
+                #
+                # Only the clone needs this. A cancelled fetch or checkout leaves a valid
+                # repository that the next run recovers from on its own.
+                shutil.rmtree(destination, ignore_errors=True)
+                raise
             clone_seconds = time.monotonic() - clone_started
             if returncode:
                 shutil.rmtree(destination, ignore_errors=True)
