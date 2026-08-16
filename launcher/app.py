@@ -1180,6 +1180,22 @@ def copy_into_place(
                 copied += len(chunk)
                 if on_progress is not None:
                     on_progress(copied)
+            # Durability first, and it is why this is not optional. The docstring above
+            # explains that a truncated file at the real path is trusted forever by the
+            # already-exists check in _download_file - and without this, os.replace
+            # renames a file whose contents may be entirely in page cache. A pod stop
+            # between the rename and writeback leaves a full-length file with unwritten
+            # contents at the real path. Same failure the sidecar exists to prevent,
+            # through a different door.
+            #
+            # It also stops place_seconds lying. One pod reported 2369 MB/s placing a
+            # 28 GB file where dd oflag=direct measures 332 MB/s on that class of volume;
+            # you cannot beat the device sevenfold, so that was page cache. The unpaid
+            # writeback then drained through the next two files, which placed at 25 and
+            # 29 MB/s. Expect this number to get larger and more variable. That is the
+            # measurement becoming true, not the copy getting slower.
+            writer.flush()
+            os.fsync(writer.fileno())
         os.replace(sidecar, destination)
     finally:
         # Covers the raise above and any error mid-copy. It does not cover SIGKILL or a
@@ -1209,6 +1225,25 @@ def human_bytes(count: float) -> str:
             return f"{count:.2f} {unit}" if unit == "GB" else f"{count:.0f} {unit}"
         count /= 1024
     return f"{count:.2f} GB"
+
+
+def restart_timeout() -> float:
+    """How long to wait for ComfyUI to answer again after a reboot.
+
+    Read at call time rather than at import, so a pod can raise it without a rebuild.
+
+    120 was too short and was hardcoded. On a loaded host, ComfyUI importing torch and
+    scanning seven node packs off shared storage does not reliably finish inside two
+    minutes: a real customer install ended at 100% carrying "did not become ready again
+    within two minutes", which reads as a fault and was not one.
+
+    A value that will not parse falls back to the default rather than failing the restart,
+    because a typo in a pod template must not be the reason ComfyUI never comes back.
+    """
+    try:
+        return float(os.getenv("COMFYUI_RESTART_TIMEOUT", "") or 300)
+    except ValueError:
+        return 300.0
 
 
 def human_duration(seconds: float) -> str:
@@ -1275,7 +1310,23 @@ def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
         for line in output.splitlines()
         if "DL:" in line or "WARN" in line or "ERROR" in line
     ]
-    return kept[-limit:]
+    if len(kept) <= limit:
+        return kept
+    # Both ends, not a tail, and `limit` means the total kept rather than the last N -
+    # the only caller takes the default, so that distinction lives here or nowhere.
+    #
+    # This used to be kept[-limit:]. At --console-log-level=notice these lines arrive
+    # about once a second, so on a 123-second transfer we kept 72%->99% and deleted the
+    # first 83 seconds - and rate_samples for that same file shows 542 MB/s at t=10.5s
+    # decaying to ~200 for the rest. The collapse was in the part we deleted. We built
+    # the black box and kept only the last 40 seconds of the flight.
+    head = limit // 2
+    tail = limit - head
+    return [
+        *kept[:head],
+        f"… {len(kept) - limit} lines omitted …",
+        *kept[-tail:],
+    ]
 
 
 _NETWORK_FAILURE_MARKERS = (
@@ -1854,9 +1905,10 @@ class ComfyServiceController:
                     # A successful reboot normally closes the current HTTP connection.
                     pass
 
+                bound = restart_timeout()
                 started = time.monotonic()
                 saw_offline = False
-                while time.monotonic() - started < 120:
+                while time.monotonic() - started < bound:
                     await asyncio.sleep(1)
                     ready = await self._is_ready(client)
                     saw_offline = saw_offline or not ready
@@ -1869,7 +1921,12 @@ class ComfyServiceController:
                             completed_at=utc_now(),
                         )
                         return
-            raise RuntimeError("ComfyUI did not become ready again within two minutes.")
+            # The elapsed time, not just the bound: a pod that waited 301s and one that
+            # fell out of the loop early look identical otherwise.
+            raise RuntimeError(
+                f"ComfyUI did not come back within {bound:.0f}s "
+                f"(waited {time.monotonic() - started:.0f}s)."
+            )
         except Exception as exc:
             self.update(
                 status="error",

@@ -5710,3 +5710,119 @@ def test_a_cancel_during_the_comfyui_probes_is_not_swallowed(
     record = store.export()["comfyui_update"]
     assert record["error"] == "InstallCancelled"
     assert record["skipped"] is False
+
+
+def test_a_placement_is_on_the_disk_before_it_is_renamed(tmp_path, monkeypatch) -> None:
+    """os.replace on an unflushed file leaves a full-length file with no contents.
+
+    The sidecar exists so a crash mid-copy never leaves a truncated file at the real path,
+    because _download_file's already-exists check trusts its length and skips the download
+    for good. Renaming a file that is still entirely in page cache reaches the same end
+    through a different door: a pod stop between the rename and writeback.
+    """
+    payload = b"durable-payload" * 4096
+    source = tmp_path / "staged.part"
+    source.write_bytes(payload)
+    destination = tmp_path / "models" / "placed.safetensors"
+    destination.parent.mkdir(parents=True)
+    pretend_free_space(monkeypatch, 300 * 1024**3)
+
+    order: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def recording_fsync(fd):
+        order.append("fsync")
+        return real_fsync(fd)
+
+    def recording_replace(src, dst, *args, **kwargs):
+        order.append("replace")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(launcher_app.os, "fsync", recording_fsync)
+    monkeypatch.setattr(launcher_app.os, "replace", recording_replace)
+
+    launcher_app.copy_into_place(source, destination)
+
+    # Order, not timing: a duration assertion here would be measuring this machine.
+    assert order == ["fsync", "replace"]
+    assert destination.read_bytes() == payload
+
+
+def test_the_restart_bound_is_configurable_and_no_longer_two_minutes(monkeypatch) -> None:
+    """A real customer install ended at 100% carrying the old warning, and was fine.
+
+    ComfyUI importing torch and scanning seven node packs off shared storage does not
+    reliably finish in 120 seconds on a loaded host.
+    """
+    monkeypatch.delenv("COMFYUI_RESTART_TIMEOUT", raising=False)
+    assert launcher_app.restart_timeout() == 300
+
+    monkeypatch.setenv("COMFYUI_RESTART_TIMEOUT", "45")
+    assert launcher_app.restart_timeout() == 45
+
+    # A typo in a pod template must not be the reason ComfyUI never comes back.
+    monkeypatch.setenv("COMFYUI_RESTART_TIMEOUT", "banana")
+    assert launcher_app.restart_timeout() == 300
+
+
+def test_the_restart_failure_says_how_long_it_actually_waited(monkeypatch) -> None:
+    """"within two minutes" reads as a fault. The elapsed number reads as a fact."""
+    controller = launcher_app.ComfyServiceController()
+    monkeypatch.setenv("COMFYUI_RESTART_TIMEOUT", "0")
+
+    class NeverReady:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, _url):
+            class Response:
+                status_code = 200
+
+            return Response()
+
+        async def post(self, _url, **_kwargs):
+            class Response:
+                status_code = 200
+
+            return Response()
+
+    monkeypatch.setattr(launcher_app.httpx, "AsyncClient", lambda **_kw: NeverReady())
+
+    asyncio.run(controller._restart())
+
+    assert controller.state.status == "error"
+    assert "did not come back within 0s" in controller.state.error
+    assert "waited" in controller.state.error
+
+
+def test_aria2_report_lines_keeps_both_ends_of_a_long_run() -> None:
+    """The collapse is at the start, and kept[-limit:] deleted exactly that.
+
+    On a 123-second transfer these arrive about once a second, so the old tail kept
+    72%->99% and threw away the first 83 seconds - while rate_samples for that same file
+    shows 542 MB/s at t=10.5s decaying to ~200 for the remainder.
+    """
+    output = "\n".join(f"[#a1b2c3 {n}GiB/100GiB CN:16 DL:{n}MiB]" for n in range(100))
+
+    lines = launcher_app.aria2_report_lines(output)
+
+    assert len(lines) == 41
+    # The first entry is the first line of the run, not the 61st.
+    assert lines[0] == "[#a1b2c3 0GiB/100GiB CN:16 DL:0MiB]"
+    assert lines[19] == "[#a1b2c3 19GiB/100GiB CN:16 DL:19MiB]"
+    assert lines[20] == "… 60 lines omitted …"
+    assert lines[21] == "[#a1b2c3 80GiB/100GiB CN:16 DL:80MiB]"
+    assert lines[-1] == "[#a1b2c3 99GiB/100GiB CN:16 DL:99MiB]"
+
+
+def test_a_short_run_is_kept_whole_with_no_marker() -> None:
+    output = "\n".join(f"[#a1b2c3 CN:16 DL:{n}MiB]" for n in range(12))
+
+    lines = launcher_app.aria2_report_lines(output)
+
+    assert len(lines) == 12
+    assert not any("omitted" in line for line in lines)
