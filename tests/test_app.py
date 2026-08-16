@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -776,7 +777,7 @@ def test_workflow_fetches_a_missing_pinned_custom_node_commit(
     repo = "https://github.com/kijai/ComfyUI-KJNodes.git"
     ref = "1289b52fbb6d64a339a4047b9ea74cf7758ccf1e"
 
-    async def fake_process(*command) -> tuple[int, str]:
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
         normalized = tuple(str(part) for part in command)
         commands.append(normalized)
         if "remote" in normalized:
@@ -1059,7 +1060,7 @@ def test_comfyui_update_uses_official_master_and_runtime_python(
     controller = launcher_app.JobController()
     commands: list[tuple[str, ...]] = []
 
-    async def fake_process(*command) -> tuple[int, str]:
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
         commands.append(tuple(str(part) for part in command))
         return 0, "ok"
 
@@ -3947,7 +3948,7 @@ def test_custom_node_ref_must_be_a_pinned_commit(tmp_path, monkeypatch) -> None:
     controller = launcher_app.JobController()
     commands: list = []
 
-    async def fake_process(*command) -> tuple[int, str]:
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
         commands.append(tuple(str(part) for part in command))
         return 0, ""
 
@@ -3965,3 +3966,223 @@ def test_custom_node_ref_must_be_a_pinned_commit(tmp_path, monkeypatch) -> None:
         )
 
     assert commands == []
+
+
+def spawned_processes(monkeypatch) -> list:
+    """Hand back every subprocess a controller starts, so a test can assert it died."""
+    spawned: list = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*command, **kwargs):
+        process = await real_exec(*command, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", recording_exec)
+    return spawned
+
+
+def recording_run_process(recorded: list, on_command=None):
+    """A _run_process stand-in that keeps the argv *and* the bound it was given."""
+
+    async def fake(*command, **bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        recorded.append((normalized, bounds))
+        if on_command is not None:
+            answer = on_command(normalized)
+            if answer is not None:
+                return answer
+        return 0, ""
+
+    return fake
+
+
+def test_a_hung_installer_subprocess_is_stopped_and_named(monkeypatch) -> None:
+    """A customer's pod sat on one line for 46 minutes because nothing could time out.
+
+    The child here never exits on its own, which is the shape of that hang exactly: the
+    inner pip was blocked on the network with an empty build overlay, and 46 minutes of
+    nothing looked identical to a working install.
+    """
+    spawned = spawned_processes(monkeypatch)
+    controller = launcher_app.JobController()
+
+    async def runner() -> None:
+        with pytest.raises(RuntimeError, match="python"):
+            await controller._run_process(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+                timeout=0.1,
+            )
+
+    asyncio.run(runner())
+
+    assert len(spawned) == 1
+    # Reaped, not merely abandoned. communicate() returned, which it cannot do while the
+    # child lives, so this is the process itself answering - not a sleep long enough to
+    # look convincing on this machine.
+    assert spawned[0].returncode is not None
+
+
+def test_a_hung_custom_node_subprocess_is_stopped_and_named(monkeypatch) -> None:
+    """The Custom nodes tab reaches the same git and the same pip, and hung the same way."""
+    spawned = spawned_processes(monkeypatch)
+    controller = launcher_app.CustomNodeController()
+
+    async def runner() -> None:
+        with pytest.raises(RuntimeError, match="python"):
+            await controller._run_process(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+                timeout=0.1,
+            )
+
+    asyncio.run(runner())
+
+    assert len(spawned) == 1
+    assert spawned[0].returncode is not None
+
+
+def test_an_unbounded_run_process_behaves_exactly_as_before() -> None:
+    """The default is None, so no existing caller changed meaning by gaining a keyword."""
+    script = "import sys; print('from the child'); sys.exit(3)"
+
+    for controller in (launcher_app.JobController(), launcher_app.CustomNodeController()):
+        returncode, output = asyncio.run(
+            controller._run_process(sys.executable, "-c", script)
+        )
+        assert returncode == 3
+        assert "from the child" in output
+
+
+def test_a_timed_out_process_still_reports_what_it_printed() -> None:
+    """Raising instead of returning an exit code is what keeps the message readable.
+
+    Callers build their failure text from the output tail. A synthetic non-zero return
+    would hand them an empty one and print a mystery, for the single failure mode that
+    most needs explaining - so the tail comes back on the exception instead.
+    """
+    controller = launcher_app.JobController()
+    script = (
+        "import sys, time; print('Collecting torch'); sys.stdout.flush(); time.sleep(30)"
+    )
+
+    async def runner() -> None:
+        with pytest.raises(RuntimeError) as failure:
+            await controller._run_process(sys.executable, "-c", script, timeout=0.5)
+        message = str(failure.value)
+        assert "Collecting torch" in message
+        assert "did not finish within" in message
+
+    asyncio.run(runner())
+
+
+def test_every_subprocess_the_workflow_installer_starts_is_bounded(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Not one unbounded await left on the workflow path - argv by argv."""
+    comfy_dir = tmp_path / "ComfyUI"
+    custom_nodes = comfy_dir / "custom_nodes"
+    comfy_dir.mkdir()
+    (comfy_dir / ".git").mkdir()
+    (comfy_dir / "requirements.txt").write_text("# none\n", encoding="utf-8")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+
+    controller = launcher_app.JobController()
+    recorded: list = []
+    ref = "1289b52fbb6d64a339a4047b9ea74cf7758ccf1e"
+
+    def answer(command):
+        if "remote" in command and "get-url" in command:
+            return 0, "https://github.com/kijai/ComfyUI-KJNodes\n"
+        if "cat-file" in command:
+            return 1, "missing"
+        if "clone" in command:
+            # Give the pip step something to install, so its bound is recorded too.
+            destination = Path(command[-1])
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "requirements.txt").write_text("# none\n", encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(
+        controller, "_run_process", recording_run_process(recorded, answer)
+    )
+
+    custom_nodes.mkdir(parents=True, exist_ok=True)
+    asyncio.run(controller._update_comfyui())
+    asyncio.run(
+        controller._install_custom_node(
+            {
+                "name": "ComfyUI-KJNodes",
+                "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+                "ref": ref,
+                "install_requirements": True,
+            }
+        )
+    )
+
+    assert len(recorded) >= 8
+    unbounded = [command for command, bounds in recorded if not bounds.get("timeout")]
+    assert unbounded == [], f"unbounded subprocess: {unbounded}"
+
+    # The bounds themselves, so a careless edit cannot quietly let git wait half an hour.
+    for command, bounds in recorded:
+        timeout = bounds["timeout"]
+        if "pip" in command:
+            assert timeout == 1800
+        elif "cat-file" in command or ("remote" in command and "get-url" in command):
+            assert timeout == 60
+        else:
+            assert timeout == 600
+
+
+def test_every_subprocess_the_custom_nodes_tab_starts_is_bounded(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The second copy of the same bug, bounded by the second copy of the same helper."""
+    comfy_dir = tmp_path / "ComfyUI"
+    custom_nodes = comfy_dir / "custom_nodes"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(launcher_app, "validate_custom_node_url", lambda url: url)
+
+    controller = launcher_app.CustomNodeController()
+    recorded: list = []
+
+    def answer(command):
+        if "clone" in command:
+            staging = Path(command[-1])
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "requirements.txt").write_text("# none\n", encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(
+        controller, "_run_process", recording_run_process(recorded, answer)
+    )
+
+    async def install() -> launcher_app.CustomNodeState:
+        created = await controller.enqueue("https://github.com/example/Example-Node")
+        if controller.worker_task:
+            await controller.worker_task
+        return controller.items[created["id"]]
+
+    item = asyncio.run(install())
+
+    assert item.status == "complete", item.error
+    commands = [command for command, _bounds in recorded]
+    assert any("clone" in command for command in commands)
+    assert any("pip" in command for command in commands)
+    assert [command for command, bounds in recorded if not bounds.get("timeout")] == []
+
+    # And the branch that only runs when the folder is already there.
+    recorded.clear()
+    asyncio.run(controller._origin_url(custom_nodes / "Example-Node"))
+    assert recorded and recorded[0][1] == {"timeout": 60}

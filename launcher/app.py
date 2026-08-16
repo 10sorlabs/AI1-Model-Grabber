@@ -1308,21 +1308,66 @@ class CustomNodeController:
             setattr(item, key, value)
         item.updated_at = utc_now()
 
-    async def _origin_url(self, destination: Path) -> str:
+    async def _run_process(
+        self, *command: str | Path, timeout: float | None = None
+    ) -> tuple[int, str]:
+        """Same contract as JobController._run_process, deliberately duplicated.
+
+        This tab reaches the same git and the same pip as the workflow installer, so it
+        hung the same way: a user installing ComfyUI-Impact-Pack from the Custom nodes
+        tab waited on an unbounded communicate() exactly as the customer's pod did.
+
+        Not hoisted into a shared helper or a mixin here. The two controllers carry
+        different state objects and handle their errors differently, and a refactor
+        across both call graphs is not reviewable alongside the rest of this change.
+        Twenty duplicated lines is the cheaper risk today; folding them together is a
+        follow-up on its own.
+        """
         process = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(destination),
-            "remote",
-            "get-url",
-            "origin",
+            *(str(part) for part in command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        output, _ = await process.communicate()
-        if process.returncode:
+        executable = Path(str(command[0])).name
+        started = time.monotonic()
+        waiter = asyncio.ensure_future(process.communicate())
+        try:
+            output, _ = await asyncio.wait_for(asyncio.shield(waiter), timeout)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - started
+            process.terminate()
+            try:
+                # Shielded so the waiter survives this timeout and can still be awaited
+                # after SIGKILL; otherwise the transport is never closed.
+                output, _ = await asyncio.wait_for(asyncio.shield(waiter), 5)
+            except asyncio.TimeoutError:
+                process.kill()
+                output, _ = await waiter
+            tail = output.decode(errors="replace")[-500:].strip() if output else ""
+            raise RuntimeError(
+                f"{executable} did not finish within {timeout:.0f}s and was stopped "
+                f"after {elapsed:.0f}s. {tail}".strip()
+            )
+        return process.returncode or 0, output.decode(errors="replace")
+
+    async def _origin_url(self, destination: Path) -> str:
+        try:
+            returncode, output = await self._run_process(
+                "git",
+                "-C",
+                destination,
+                "remote",
+                "get-url",
+                "origin",
+                timeout=60,
+            )
+        except RuntimeError:
+            # A git that hung reading a local config answers the caller's question the
+            # same way a git that failed does: this folder cannot be identified as ours.
             return ""
-        return output.decode(errors="replace").strip()
+        if returncode:
+            return ""
+        return output.strip()
 
     async def _run_item(self, item: CustomNodeState) -> None:
         staging: Path | None = None
@@ -1369,21 +1414,18 @@ class CustomNodeController:
                 message=f"Cloning {item.name}...",
                 percent=12,
             )
-            process = await asyncio.create_subprocess_exec(
+            returncode, output = await self._run_process(
                 "git",
                 "clone",
                 "--filter=blob:none",
                 "--single-branch",
                 item.url,
-                str(staging),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                staging,
+                timeout=600,
             )
-            output, _ = await process.communicate()
-            if process.returncode:
+            if returncode:
                 raise RuntimeError(
-                    "Git could not clone this custom node: "
-                    f"{output.decode(errors='replace')[-500:]}"
+                    f"Git could not clone this custom node: {output[-500:]}"
                 )
 
             self.update(item, percent=74, message="Repository cloned.")
@@ -1398,21 +1440,18 @@ class CustomNodeController:
                 python = COMFYUI_VENV / "bin" / "python"
                 if not python.exists():
                     python = Path(sys.executable)
-                process = await asyncio.create_subprocess_exec(
-                    str(python),
+                returncode, output = await self._run_process(
+                    python,
                     "-m",
                     "pip",
                     "install",
                     "-r",
-                    str(requirements),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
+                    requirements,
+                    timeout=1800,
                 )
-                output, _ = await process.communicate()
-                if process.returncode:
+                if returncode:
                     raise RuntimeError(
-                        "Custom node requirements failed: "
-                        f"{output.decode(errors='replace')[-500:]}"
+                        f"Custom node requirements failed: {output[-500:]}"
                     )
                 self.update(item, percent=96, message="Requirements installed.")
 
@@ -1732,7 +1771,7 @@ class JobController:
         for message, command in commands:
             self.check_cancelled()
             self.update(stage="updating", message=message, bytes_per_second=0)
-            returncode, output = await self._run_process(*command)
+            returncode, output = await self._run_process(*command, timeout=600)
             if returncode:
                 raise RuntimeError(f"ComfyUI update failed: {output[-500:]}")
 
@@ -1754,6 +1793,7 @@ class JobController:
             "install",
             "-r",
             requirements,
+            timeout=1800,
         )
         if returncode:
             raise RuntimeError(f"ComfyUI requirements failed: {output[-500:]}")
@@ -2614,13 +2654,50 @@ class JobController:
 
         return use_checksum
 
-    async def _run_process(self, *command: str | Path) -> tuple[int, str]:
+    async def _run_process(
+        self, *command: str | Path, timeout: float | None = None
+    ) -> tuple[int, str]:
+        """Run a command to completion; return (exit code, stdout+stderr).
+
+        timeout is in seconds and defaults to None, so adding it changes no existing
+        caller's meaning - only the ones that opt in.
+
+        Expiry raises rather than returning a synthetic non-zero exit code. Every caller
+        builds its failure message from the output tail (f"…: {output[-500:]}"), so a
+        synthetic code would hand them an empty tail and print a failure with nothing in
+        it - for the one failure mode that most needs explaining. A customer's pod sat on
+        one line for 46 minutes because nothing here could time out; the message this
+        raises is what that pod should have said instead.
+        """
         process = await asyncio.create_subprocess_exec(
             *(str(part) for part in command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        output, _ = await process.communicate()
+        executable = Path(str(command[0])).name
+        started = time.monotonic()
+        # Shielded, so a timeout below cancels this await without cancelling the
+        # communicate() underneath it: the same waiter still has to be awaited after the
+        # signal, or the transport is never closed. Same shape as the aria2c cancel path.
+        waiter = asyncio.ensure_future(process.communicate())
+        try:
+            output, _ = await asyncio.wait_for(asyncio.shield(waiter), timeout)
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - started
+            process.terminate()
+            try:
+                output, _ = await asyncio.wait_for(asyncio.shield(waiter), 5)
+            except asyncio.TimeoutError:
+                process.kill()
+                output, _ = await waiter
+            # Whatever it managed to print before it stopped. A hung pip has usually said
+            # something useful ("Collecting torch…"), and this is the only place it can
+            # still be read: the caller has no output to build a tail from.
+            tail = output.decode(errors="replace")[-500:].strip() if output else ""
+            raise RuntimeError(
+                f"{executable} did not finish within {timeout:.0f}s and was stopped "
+                f"after {elapsed:.0f}s. {tail}".strip()
+            )
         return process.returncode or 0, output.decode(errors="replace")
 
     async def _install_custom_node(self, node: dict[str, Any]) -> None:
@@ -2652,6 +2729,7 @@ class JobController:
                 "--filter=blob:none",
                 repo,
                 destination,
+                timeout=600,
             )
             if returncode:
                 shutil.rmtree(destination, ignore_errors=True)
@@ -2666,6 +2744,7 @@ class JobController:
                 "remote",
                 "get-url",
                 "origin",
+                timeout=60,
             )
             if returncode or normalized_git_remote(origin) != normalized_git_remote(repo):
                 raise RuntimeError(
@@ -2680,6 +2759,7 @@ class JobController:
             "-e",
             "--end-of-options",
             f"{ref}^{{commit}}",
+            timeout=60,
         )
         if returncode:
             returncode, output = await self._run_process(
@@ -2692,6 +2772,7 @@ class JobController:
                 "--end-of-options",
                 "origin",
                 ref,
+                timeout=600,
             )
             if returncode:
                 raise RuntimeError(
@@ -2708,6 +2789,7 @@ class JobController:
             # --detach ("does not take a path argument"). The 40-hex validation above
             # is what keeps this ref from ever being parsed as an option.
             ref,
+            timeout=600,
         )
         if returncode:
             raise RuntimeError(
@@ -2727,6 +2809,7 @@ class JobController:
                 "install",
                 "-r",
                 requirements,
+                timeout=1800,
             )
             if returncode:
                 raise RuntimeError(
