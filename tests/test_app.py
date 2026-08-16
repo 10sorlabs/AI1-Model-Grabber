@@ -827,7 +827,7 @@ def test_workflow_skips_failed_custom_node_and_continues(
     controller = launcher_app.JobController()
     attempted: list[str] = []
 
-    async def fake_install(node) -> None:
+    async def fake_install(node, *, on_step=None) -> None:
         attempted.append(node["name"])
         if node["name"] == "Broken-Node":
             raise RuntimeError("simulated node failure")
@@ -4389,3 +4389,221 @@ def test_the_custom_nodes_tab_pip_carries_the_same_flags(
     assert "--no-build-isolation" in pip_runs[0]
     assert pip_runs[0][pip_runs[0].index("--timeout") + 1] == "15"
     assert pip_runs[0][pip_runs[0].index("--retries") + 1] == "3"
+
+
+def drive_custom_nodes(tmp_path, monkeypatch, install, nodes=None):
+    """Run _install_custom_nodes with a stubbed per-node install, recording the panel.
+
+    Returns (controller, messages) - every message the panel was given, in order.
+    """
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+    messages: list[str] = []
+    original_update = controller.update
+
+    def recording_update(**changes) -> None:
+        if "message" in changes:
+            messages.append(str(changes["message"]))
+        original_update(**changes)
+
+    monkeypatch.setattr(controller, "update", recording_update)
+    monkeypatch.setattr(controller, "_install_custom_node", install)
+
+    asyncio.run(
+        controller._install_custom_nodes(
+            nodes
+            if nodes is not None
+            else [
+                {"name": "ComfyUI-KJNodes", "repo": "https://github.com/a/b", "ref": "a" * 40},
+                {"name": "ComfyUI-Impact-Pack", "repo": "https://github.com/c/d", "ref": "b" * 40},
+            ]
+        )
+    )
+    return controller, messages
+
+
+def test_a_node_install_does_not_inherit_the_last_download_byte_counter(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The customer's screenshot read "8.0 MB / 357.7 MB" while installing a node.
+
+    update() is plain setattr, so both fields kept whatever the previous model download
+    left in them. There is no such file: a node install moves no file bytes.
+    """
+
+    async def install(node, *, on_step=None) -> None:
+        return None
+
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+    # Exactly the state a finished model download leaves behind.
+    controller.state.file_downloaded_bytes = 375_083_008
+    controller.state.file_total_bytes = 375_083_008
+    monkeypatch.setattr(controller, "_install_custom_node", install)
+
+    asyncio.run(
+        controller._install_custom_nodes(
+            [{"name": "ComfyUI-KJNodes", "repo": "https://github.com/a/b", "ref": "a" * 40}]
+        )
+    )
+
+    assert controller.state.file_downloaded_bytes == 0
+    assert controller.state.file_total_bytes == 0
+
+
+def test_the_node_panel_reports_the_step_and_the_elapsed_time(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A frozen string for 46 minutes reads as dead, however true it is."""
+
+    async def install(node, *, on_step=None) -> None:
+        on_step("cloning")
+        on_step("installing dependencies")
+
+    _controller, messages = drive_custom_nodes(tmp_path, monkeypatch, install)
+
+    assert any("(node 1 of 2)" in message for message in messages)
+    assert any("(node 2 of 2)" in message for message in messages)
+    assert any("cloning" in message for message in messages)
+    assert any("installing dependencies" in message for message in messages)
+    # The format the panel actually shows, elapsed stamp included.
+    assert re.search(
+        r"Installing ComfyUI-Impact-Pack \(node 2 of 2\) — installing dependencies, \d+s",
+        "\n".join(messages),
+    )
+
+
+def test_no_ticker_outlives_the_node_it_was_reporting(tmp_path, monkeypatch) -> None:
+    """A surviving ticker overwrites whatever message is written next."""
+    before = None
+
+    async def install(node, *, on_step=None) -> None:
+        on_step("cloning")
+        # Long enough for at least one tick to fire while this node is "running".
+        await asyncio.sleep(1.2)
+
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+    monkeypatch.setattr(controller, "_install_custom_node", install)
+
+    async def runner() -> int:
+        nonlocal before
+        before = len(asyncio.all_tasks())
+        await controller._install_custom_nodes(
+            [{"name": "ComfyUI-KJNodes", "repo": "https://github.com/a/b", "ref": "a" * 40}]
+        )
+        return len(asyncio.all_tasks())
+
+    after = asyncio.run(runner())
+
+    # Counted, not slept on: nothing is left running to overwrite the next message.
+    assert after == before
+    assert controller.state.message == "Finishing workflow setup…"
+    # And a tick really did fire, so the assertion above is not vacuous.
+    assert controller.state.percent == 99
+
+
+def test_a_failed_node_keeps_its_skip_message(tmp_path, monkeypatch) -> None:
+    """The ticker must be gone before the skip message is written, not after."""
+
+    async def install(node, *, on_step=None) -> None:
+        on_step("installing dependencies")
+        await asyncio.sleep(1.2)
+        raise RuntimeError("pip did not finish within 1800s")
+
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", tmp_path / "custom_nodes")
+    controller = launcher_app.JobController()
+    monkeypatch.setattr(controller, "_install_custom_node", install)
+
+    async def runner() -> int:
+        await controller._install_custom_nodes(
+            [
+                {"name": "ComfyUI-Impact-Pack", "repo": "https://github.com/c/d", "ref": "b" * 40},
+            ]
+        )
+        return len(asyncio.all_tasks())
+
+    remaining = asyncio.run(runner())
+
+    assert remaining == 1  # the runner itself
+    assert controller.state.warnings == [
+        "ComfyUI-Impact-Pack: pip did not finish within 1800s"
+    ]
+    assert controller.state.message == "Finishing workflow setup…"
+
+
+def test_each_node_prints_where_its_time_went(tmp_path, monkeypatch, capsys) -> None:
+    """The measurement that decides whether the per-node pip runs should be batched.
+
+    Printed rather than inferred: every performance question about this launcher so far
+    that was answered by guessing was answered wrongly.
+    """
+    custom_nodes = tmp_path / "custom_nodes"
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+    controller = launcher_app.JobController()
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if "clone" in normalized:
+            destination = Path(normalized[-1])
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "requirements.txt").write_text("pyyaml\n", encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    asyncio.run(
+        controller._install_custom_node(
+            {
+                "name": "ComfyUI-KJNodes",
+                "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+                "ref": "a" * 40,
+                "install_requirements": True,
+            }
+        )
+    )
+
+    printed = capsys.readouterr().out
+    assert "ComfyUI-KJNodes: cloned in " in printed
+    assert "dependencies in " in printed
+    assert "total " in printed
+
+
+def test_a_node_that_was_already_cloned_reports_no_clone_phase(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Omit a phase that did not run, rather than printing 0.0s and inviting a theory."""
+    custom_nodes = tmp_path / "custom_nodes"
+    destination = custom_nodes / "ComfyUI-KJNodes"
+    destination.mkdir(parents=True)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+    controller = launcher_app.JobController()
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if "remote" in normalized and "get-url" in normalized:
+            return 0, "https://github.com/kijai/ComfyUI-KJNodes\n"
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    asyncio.run(
+        controller._install_custom_node(
+            {
+                "name": "ComfyUI-KJNodes",
+                "repo": "https://github.com/kijai/ComfyUI-KJNodes",
+                "ref": "a" * 40,
+                "install_requirements": True,
+            }
+        )
+    )
+
+    printed = capsys.readouterr().out
+    assert "ComfyUI-KJNodes: total " in printed
+    assert "cloned in" not in printed

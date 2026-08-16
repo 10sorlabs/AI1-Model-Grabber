@@ -2766,7 +2766,27 @@ class JobController:
             )
         return process.returncode or 0, output.decode(errors="replace")
 
-    async def _install_custom_node(self, node: dict[str, Any]) -> None:
+    async def _install_custom_node(
+        self,
+        node: dict[str, Any],
+        *,
+        on_step: Any = None,
+    ) -> None:
+        """Install one pinned node pack.
+
+        on_step is called with a short phrase as each stage begins - the caller renders
+        it into a message that also carries elapsed time. Without it the panel showed one
+        frozen string for however long the node took, and 46 minutes of a hung pip looked
+        exactly like a node that was working.
+        """
+
+        def step(phrase: str) -> None:
+            if on_step is not None:
+                on_step(phrase)
+
+        started = time.monotonic()
+        clone_seconds = 0.0
+        dependencies_seconds = 0.0
         name = str(node.get("name", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
             raise RuntimeError(f"Unsafe custom node name: {name!r}")
@@ -2789,6 +2809,8 @@ class JobController:
             raise RuntimeError(f"Unsafe custom node destination: {name}")
 
         if not destination.exists():
+            step("cloning")
+            clone_started = time.monotonic()
             returncode, output = await self._run_process(
                 "git",
                 "clone",
@@ -2797,6 +2819,7 @@ class JobController:
                 destination,
                 timeout=600,
             )
+            clone_seconds = time.monotonic() - clone_started
             if returncode:
                 shutil.rmtree(destination, ignore_errors=True)
                 raise RuntimeError(
@@ -2828,6 +2851,7 @@ class JobController:
             timeout=60,
         )
         if returncode:
+            step("fetching the pinned version")
             returncode, output = await self._run_process(
                 "git",
                 "-C",
@@ -2845,6 +2869,7 @@ class JobController:
                     f"Could not fetch the pinned version for {name}: {output[-500:]}"
                 )
 
+        step("selecting the pinned version")
         returncode, output = await self._run_process(
             "git",
             "-C",
@@ -2865,6 +2890,8 @@ class JobController:
         self.state.restart_required = True
         requirements = destination / "requirements.txt"
         if node.get("install_requirements", True) and requirements.exists():
+            step("installing dependencies")
+            dependencies_started = time.monotonic()
             pip = COMFYUI_VENV / "bin" / "python"
             if not pip.exists():
                 pip = Path("python3.12")
@@ -2922,6 +2949,22 @@ class JobController:
                 raise RuntimeError(
                     f"Dependencies failed for {name}: {output[-500:]}"
                 )
+            dependencies_seconds = time.monotonic() - dependencies_started
+
+        # One permanent line per node, same purpose and shape as _log_file_timing. This
+        # is the measurement that decides whether the per-node pip runs are worth
+        # batching into one; guessing at that is how this project got burned before.
+        phases = []
+        if clone_seconds:
+            phases.append(f"cloned in {clone_seconds:.1f}s")
+        if dependencies_seconds:
+            phases.append(f"dependencies in {dependencies_seconds:.1f}s")
+        print(
+            f"10sorLabs launcher: {name}: "
+            + "".join(f"{phase}, " for phase in phases)
+            + f"total {time.monotonic() - started:.1f}s",
+            flush=True,
+        )
 
     async def _install_custom_nodes(self, nodes: list[dict[str, Any]]) -> None:
         CUSTOM_NODES_DIR.mkdir(parents=True, exist_ok=True)
@@ -2929,21 +2972,62 @@ class JobController:
             self.check_cancelled()
             name = str(node.get("name", "")).strip() or f"Custom node {index + 1}"
             progress = 88 + (index / max(len(nodes), 1)) * 10
+            started = time.monotonic()
+            phase = {"text": "starting"}
+
+            def rendered(phase=phase, name=name, index=index, started=started) -> str:
+                return (
+                    f"Installing {name} (node {index + 1} of {len(nodes)}) — "
+                    f"{phase['text']}, {human_duration(time.monotonic() - started)}"
+                )
+
             self.update(
                 stage="installing",
-                message=f"Installing custom node {name}…",
+                message=rendered(),
                 current_file=name,
                 file_index=index + 1,
                 file_count=len(nodes),
                 percent=progress,
                 bytes_per_second=0,
+                # A node install moves no file bytes, and update() is plain setattr, so
+                # without these two the panel keeps whatever the last model download left
+                # in them. The customer's screenshot read "8.0 MB / 357.7 MB" during a
+                # node install, and later "357.7 MB / 357.7 MB". There is no such file.
+                # app.js renders the byte line only when one of them is above zero, so
+                # zeroing both hides it - no JavaScript change needed.
+                file_downloaded_bytes=0,
+                file_total_bytes=0,
             )
+
+            async def tick(rendered=rendered) -> None:
+                # Elapsed time is the one number on this panel that cannot lie, and on a
+                # slow node it is the difference between a panel that is quiet and a
+                # panel that is dead.
+                while True:
+                    await asyncio.sleep(1)
+                    self.update(message=rendered())
+
+            def step(phrase: str, phase=phase, rendered=rendered) -> None:
+                phase["text"] = phrase
+                self.update(message=rendered())
+
+            ticker = asyncio.create_task(tick())
+            failure: Exception | None = None
             try:
-                await self._install_custom_node(node)
+                await self._install_custom_node(node, on_step=step)
             except InstallCancelled:
                 raise
             except Exception as exc:
-                self.add_warning(f"{name}: {exc}")
+                failure = exc
+            finally:
+                # Dead before anything below writes a message, or its next tick
+                # overwrites that message and the panel reports the wrong thing. Same
+                # discipline as the aria2c poller's finally, for the same reason.
+                ticker.cancel()
+                await asyncio.gather(ticker, return_exceptions=True)
+
+            if failure is not None:
+                self.add_warning(f"{name}: {failure}")
                 self.update(
                     message=f"{name} failed — skipped; continuing setup…",
                     percent=88 + ((index + 1) / max(len(nodes), 1)) * 10,
