@@ -1331,8 +1331,10 @@ def test_parallel_file_downloads_through_aria2c(tmp_path, monkeypatch) -> None:
         "--file-allocation=none",
         "--allow-overwrite=true",
         "--auto-file-renaming=false",
-        "--summary-interval=0",
-        "--console-log-level=warn",
+        # notice + a 30s summary, so a download that succeeds slowly still says what it
+        # did. Until this changed, aria2c's output was read only on a non-zero exit.
+        "--summary-interval=30",
+        "--console-log-level=notice",
     )
     # Verified as it writes, so the file is never read back to hash it.
     assert recorded[0][11] == f"--checksum=sha-256={hashlib.sha256(payload).hexdigest()}"
@@ -1690,6 +1692,7 @@ def drive_aria2_download(
     payload,
     linger=0.0,
     supports_checksum=True,
+    output=b"",
 ):
     """Run _download_file down the aria2c branch and report what it did.
 
@@ -1730,7 +1733,8 @@ def drive_aria2_download(
                 # Held open so the poller sees a complete file next to a live process,
                 # which is exactly the state aria2c is in during its checksum pass.
                 await asyncio.sleep(linger)
-            return b"", b""
+            # What aria2c printed. Only the failure path used to read this.
+            return output, b""
 
         def terminate(self) -> None:
             return None
@@ -4607,3 +4611,312 @@ def test_a_node_that_was_already_cloned_reports_no_clone_phase(
     printed = capsys.readouterr().out
     assert "ComfyUI-KJNodes: total " in printed
     assert "cloned in" not in printed
+
+
+def test_the_rate_sampler_thins_a_transfer_into_a_shape() -> None:
+    """Once per poll tick would be 7200 samples an hour, which nobody will read."""
+    sampler = launcher_app.RateSampler(interval=10.0)
+    for second in range(11):
+        sampler.add(float(second), 1_000_000.0 * second)
+
+    exported = sampler.export()
+    assert len(exported) == 2
+    assert exported[0][0] == 0.0
+    assert exported[1][0] == 10.0
+
+
+def test_the_rate_sampler_keeps_the_beginning_of_a_run_not_the_end() -> None:
+    """The collapse being chased starts near 1 GiB/s. Dropping from the front would
+    discard exactly the evidence this exists to collect, which is what a
+    deque(maxlen=...) would have done."""
+    sampler = launcher_app.RateSampler(interval=0.0, max_samples=3)
+    for second in range(500):
+        sampler.add(float(second), float(second))
+
+    assert sampler.export() == [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]
+
+
+def test_aria2_report_lines_keeps_the_summaries_and_the_complaints() -> None:
+    output = "\n".join(
+        [
+            "02/17 09:14:01 [NOTICE] Downloading 1 item(s)",
+            "[#a1b2c3 12GiB/28GiB(42%) CN:16 DL:1.0GiB ETA:16s]",
+            "02/17 09:14:31 [WARN] CUID#7 - Download aborted. URI=https://example",
+            "[#a1b2c3 20GiB/28GiB(71%) CN:16 DL:11MiB ETA:12m]",
+            "02/17 09:20:00 [ERROR] CUID#9 - Restarting download.",
+            "02/17 09:20:01 [NOTICE] Download complete",
+        ]
+    )
+
+    lines = launcher_app.aria2_report_lines(output)
+
+    assert len(lines) == 4
+    assert any("DL:1.0GiB" in line for line in lines)
+    assert any("DL:11MiB" in line for line in lines)
+    assert any("WARN" in line for line in lines)
+    assert any("ERROR" in line for line in lines)
+    assert not any("Downloading 1 item(s)" in line for line in lines)
+
+
+def test_aria2_report_lines_never_carries_a_presigned_signature() -> None:
+    """This output is meant to be pasted into a chat window."""
+    output = (
+        "02/17 09:14:31 [WARN] CUID#7 - Download aborted. URI="
+        "https://pub-9c2f.r2.cloudflarestorage.com/models/flux1-dev.safetensors"
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE"
+        "&X-Amz-Signature=1f3a9c77b2e4d6180ab55c9e2f7d3b41&X-Amz-Expires=3600"
+    )
+
+    line = launcher_app.aria2_report_lines(output)[0]
+
+    assert "X-Amz-Signature" not in line
+    assert "AKIAEXAMPLE" not in line
+    # The hostname is the point of keeping the line at all.
+    assert "pub-9c2f.r2.cloudflarestorage.com" in line
+    assert "[redacted]" in line
+
+
+def test_diagnostics_caps_its_history_and_reports_newest_first() -> None:
+    store = launcher_app.Diagnostics()
+    for number in range(60):
+        record = store.begin_file(
+            name=f"file-{number}",
+            url="https://cdn.example/model.safetensors",
+            size_bytes=1024,
+            transport="aria2c",
+            staging="container-disk",
+        )
+        store.finish_file(record)
+
+    exported = store.export()
+    assert len(exported["files"]) == 50
+    assert exported["files"][0]["name"] == "file-59"
+    assert exported["files"][-1]["name"] == "file-10"
+
+
+def test_diagnostics_never_exports_a_url_or_a_path() -> None:
+    """Structural, not one hand-picked field: walk everything and look."""
+    store = launcher_app.Diagnostics()
+    record = store.begin_file(
+        name="flux1-dev.safetensors",
+        url=(
+            "https://pub-9c2f.r2.cloudflarestorage.com/models/flux1-dev.safetensors"
+            "?X-Amz-Signature=1f3a9c77b2e4d6180ab55c9e2f7d3b41"
+        ),
+        size_bytes=23_802_932_552,
+        transport="aria2c",
+        staging="container-disk",
+    )
+    store.note_aria2_lines(
+        launcher_app.aria2_report_lines(
+            "[#a1b2 1GiB/23GiB(4%) CN:16 DL:11MiB] "
+            "[WARN] URI=https://pub-9c2f.r2.cloudflarestorage.com/x?X-Amz-Signature=abc"
+        )
+    )
+    store.finish_file(record)
+    store.record_node(name="ComfyUI-Impact-Pack", total_seconds=49.5)
+
+    def every_string(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                yield key
+                yield from every_string(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from every_string(item)
+
+    for text in every_string(store.export()):
+        assert "http" not in text, f"a URL reached the export: {text!r}"
+        assert not text.startswith("/"), f"a path reached the export: {text!r}"
+    assert store.export()["files"][0]["host"] == "pub-9c2f.r2.cloudflarestorage.com"
+
+
+def test_a_file_that_fails_still_lands_a_record(tmp_path, monkeypatch) -> None:
+    """The in-flight record is closed by the caller, from the one place a failure lands."""
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+
+    controller = launcher_app.JobController()
+
+    async def explode(*_args, **_kwargs):
+        raise RuntimeError("Download failed for flux (HTTP 503).")
+
+    monkeypatch.setattr(controller, "_download_file", explode)
+    monkeypatch.setattr(controller, "_wait_for_comfyui", lambda: asyncio.sleep(0))
+    # An open record, as _download_file would have left one.
+    store.begin_file(
+        name="flux1-dev.safetensors",
+        url="https://cdn.example/flux1-dev.safetensors",
+        size_bytes=100,
+        transport="aria2c",
+        staging="beside-destination",
+    )
+
+    asyncio.run(
+        controller._install_workflow(
+            {
+                "id": "w",
+                "files": [
+                    {
+                        "name": "flux1-dev.safetensors",
+                        "url": "https://cdn.example/flux1-dev.safetensors",
+                        "destination": "models/checkpoints/flux1-dev.safetensors",
+                        "size_bytes": 100,
+                    }
+                ],
+            }
+        )
+    )
+
+    exported = store.export()
+    assert exported["in_flight"] is None
+    assert len(exported["files"]) == 1
+    assert exported["files"][0]["error"] == "Download failed for flux (HTTP 503)."
+
+
+def test_a_node_that_retried_with_isolation_says_so(tmp_path, monkeypatch) -> None:
+    """Today's failure belongs in the same report as the transfers."""
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    custom_nodes = tmp_path / "custom_nodes"
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+    controller = launcher_app.JobController()
+    attempts = {"pip": 0}
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        if "pip" in normalized:
+            attempts["pip"] += 1
+            if attempts["pip"] == 1:
+                return 1, "ModuleNotFoundError: No module named 'setuptools'"
+            return 0, ""
+        if "clone" in normalized:
+            destination = Path(normalized[-1])
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "requirements.txt").write_text("dlib\n", encoding="utf-8")
+        return 0, ""
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    asyncio.run(
+        controller._install_custom_node(
+            {
+                "name": "ComfyUI_FaceAnalysis",
+                "repo": "https://github.com/cubiq/ComfyUI_FaceAnalysis",
+                "ref": "a" * 40,
+                "install_requirements": True,
+            }
+        )
+    )
+
+    node = store.export()["nodes"][0]
+    assert node["name"] == "ComfyUI_FaceAnalysis"
+    assert node["retried_with_isolation"] is True
+    assert node["error"] is None
+
+
+def test_the_diagnostics_endpoint_answers_with_every_documented_key(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", tmp_path / "ComfyUI")
+    with TestClient(launcher_app.app) as client:
+        response = client.get("/api/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "launcher_ref",
+        "aria2c_available",
+        "aria2c_supports_checksum",
+        "staging_available",
+        "in_flight",
+        "files",
+        "nodes",
+    }
+    assert isinstance(body["files"], list)
+    assert isinstance(body["nodes"], list)
+
+
+def test_an_in_flight_transfer_exposes_its_samples_before_it_finishes() -> None:
+    """Opening this during a stall is the reading nobody has managed to take by hand."""
+    store = launcher_app.Diagnostics()
+    sampler = launcher_app.RateSampler(interval=0.0)
+    store.begin_file(
+        name="flux1-dev.safetensors",
+        url="https://cdn.example/flux1-dev.safetensors",
+        size_bytes=1024,
+        transport="aria2c",
+        staging="container-disk",
+        sampler=sampler,
+    )
+
+    sampler.add(0.0, 1_073_741_824.0)
+    sampler.add(10.0, 11_600_000.0)
+
+    in_flight = store.export()["in_flight"]
+    assert in_flight is not None
+    assert in_flight["name"] == "flux1-dev.safetensors"
+    # The collapse, live: a gigabyte a second down to single-digit megabytes.
+    assert in_flight["rate_samples"] == [[0.0, 1073741824.0], [10.0, 11600000.0]]
+
+
+def test_the_aria2c_argv_still_carries_every_invariant(tmp_path, monkeypatch) -> None:
+    """The flags this change touches, and the ones it must not."""
+    payload = b"invariant-payload" * 4096
+    result = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload, destination="models/checkpoints/invariant.safetensors"),
+        payload,
+    )
+    argv = result["argv"]
+
+    assert "--summary-interval=30" in argv
+    assert "--console-log-level=notice" in argv
+    assert "--summary-interval=0" not in argv
+    # Untouched, and each one is load-bearing: see the comments beside them.
+    assert "--file-allocation=none" in argv
+    assert "--continue=true" in argv
+    assert "--auto-file-renaming=false" in argv
+    assert "--allow-overwrite=true" in argv
+    assert "-x16" in argv and "-s16" in argv
+    assert argv[argv.index("-k") + 1] == "4M"
+    assert "--lowest-speed-limit" not in " ".join(argv)
+
+
+def test_a_successful_download_keeps_what_aria2c_reported(tmp_path, monkeypatch) -> None:
+    """The output used to be read only inside `if process.returncode:`.
+
+    So the exact failure being chased - a download that finishes, slowly - discarded
+    everything aria2c said about it.
+    """
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    payload = b"reported-payload" * 4096
+    chatter = (
+        "02/17 09:14:01 [NOTICE] Downloading 1 item(s)\n"
+        "[#a1b2c3 1.0GiB/23GiB(4%) CN:16 DL:11MiB ETA:35m]\n"
+    ).encode()
+
+    result = drive_aria2_download(
+        tmp_path,
+        monkeypatch,
+        mirrored_spec(payload, destination="models/checkpoints/reported.safetensors"),
+        payload,
+        output=chatter,
+    )
+
+    assert result["error"] is None
+    record = store.export()["files"][0]
+    assert record["aria2_lines"] == ["[#a1b2c3 1.0GiB/23GiB(4%) CN:16 DL:11MiB ETA:35m]"]
+    assert record["transport"] == "aria2c"
+    assert record["host"] == "cdn.example"
+    assert record["digest"] == "aria2c-inline"
+    assert record["bytes_transferred"] == len(payload)

@@ -925,6 +925,153 @@ class RateWindow:
         return self._last
 
 
+class RateSampler:
+    """A coarse time series of a transfer's rate, for after the fact.
+
+    RateWindow answers "how fast is it now" for the panel. This answers "what shape did
+    the run have" for a bug report - the failure being chased starts near a gigabyte a
+    second and collapses to single-digit megabytes, and the collapse is the evidence.
+
+    Throttled by time and hard-capped by count. Once the cap is reached it stops
+    appending rather than dropping from the front: the beginning of the run is the part
+    that matters, and a deque(maxlen=...) would discard exactly the evidence being
+    collected. 360 samples at 10s is an hour of transfer.
+    """
+
+    def __init__(self, interval: float = 10.0, max_samples: int = 360) -> None:
+        self._interval = interval
+        self._max_samples = max_samples
+        self._samples: list[tuple[float, float]] = []
+
+    def add(self, elapsed: float, bytes_per_second: float) -> None:
+        if len(self._samples) >= self._max_samples:
+            return
+        if self._samples and elapsed - self._samples[-1][0] < self._interval:
+            return
+        self._samples.append((elapsed, bytes_per_second))
+
+    def export(self) -> list[list[float]]:
+        return [[round(at, 1), round(rate, 1)] for at, rate in self._samples]
+
+
+class Diagnostics:
+    """What each transfer actually did, kept for a support conversation.
+
+    The unexplained problem this exists for is the launcher-vs-shell aria2c gap: shell
+    aria2c moved 28 GB to /root at ~1.0 GiB/s while the launcher's own aria2c, same pod,
+    same file, same destination, measured 11.6 / 28.9 / 85.4 MB/s across three runs.
+    Connection starvation is ruled out (16 sockets confirmed via /proc/PID/fd), as are
+    destination, subprocess environment, fd limits, container disk size and code version.
+
+    It has never reproduced on demand. It reproduces on a customer's pod at a moment
+    nobody is watching, which makes sampling the blocker rather than analysis.
+
+    Absolute rule: no URLs and no filesystem paths in anything this exports. Catalog URLs
+    are presigned R2 links carrying X-Amz-Signature, and this output is going to be
+    pasted into a chat window. Hostnames only, and staging is a label rather than a path.
+    """
+
+    def __init__(self, history: int = 50) -> None:
+        self.files: deque[dict[str, Any]] = deque(maxlen=history)
+        self.nodes: deque[dict[str, Any]] = deque(maxlen=history)
+        self._in_flight: dict[str, Any] | None = None
+        self._sampler: RateSampler | None = None
+
+    def begin_file(
+        self,
+        *,
+        name: str,
+        url: str,
+        size_bytes: int,
+        transport: str,
+        staging: str,
+        sampler: RateSampler | None = None,
+    ) -> dict[str, Any]:
+        # A record still open when the next file starts belongs to a transfer that
+        # neither finished nor reported an error. File it rather than dropping it.
+        if self._in_flight is not None:
+            self.finish_file(self._in_flight)
+        record: dict[str, Any] = {
+            "name": name,
+            "host": (urlsplit(url).hostname or "unknown").lower(),
+            "size_bytes": size_bytes,
+            "bytes_transferred": 0,
+            "transport": transport,
+            "staging": staging,
+            "progress_measurable": True,
+            "digest": "",
+            "fetch_seconds": 0.0,
+            "verify_seconds": 0.0,
+            "place_seconds": 0.0,
+            "total_seconds": 0.0,
+            "average_bytes_per_second": 0.0,
+            "rate_samples": [],
+            "aria2_lines": [],
+            "error": None,
+        }
+        self._in_flight = record
+        self._sampler = sampler
+        return record
+
+    def note_aria2_lines(self, lines: list[str]) -> None:
+        if self._in_flight is not None:
+            self._in_flight["aria2_lines"] = lines
+
+    def fail_in_flight(self, error: str) -> None:
+        if self._in_flight is not None:
+            self._in_flight["error"] = error
+            self.finish_file(self._in_flight)
+
+    def finish_file(self, record: dict[str, Any]) -> None:
+        if self._sampler is not None:
+            record["rate_samples"] = self._sampler.export()
+        self._in_flight = None
+        self._sampler = None
+        self.files.appendleft(record)
+
+    def record_node(
+        self,
+        *,
+        name: str,
+        clone_seconds: float = 0.0,
+        dependencies_seconds: float = 0.0,
+        total_seconds: float = 0.0,
+        retried_with_isolation: bool = False,
+        error: str | None = None,
+    ) -> None:
+        self.nodes.appendleft(
+            {
+                "name": name,
+                "clone_seconds": round(clone_seconds, 1),
+                "dependencies_seconds": round(dependencies_seconds, 1),
+                "total_seconds": round(total_seconds, 1),
+                "retried_with_isolation": retried_with_isolation,
+                "error": error,
+            }
+        )
+
+    def export(self) -> dict[str, Any]:
+        in_flight = None
+        if self._in_flight is not None:
+            in_flight = dict(self._in_flight)
+            if self._sampler is not None:
+                # Live. /api/diagnostics opened during a stall is the reading we have
+                # never once managed to take by hand.
+                in_flight["rate_samples"] = self._sampler.export()
+        return {
+            "launcher_ref": os.getenv("LAUNCHER_GITHUB_REF", ""),
+            "aria2c_available": ARIA2C_PATH is not None,
+            "aria2c_supports_checksum": ARIA2C_SUPPORTS_CHECKSUM,
+            # The cached accessor, which touches nothing. blocks_are_real() is
+            # deliberately not called here: it writes a probe file, and the per-record
+            # progress_measurable already carries that answer for free.
+            "staging_available": scratch_dir() is not None,
+            "in_flight": in_flight,
+            "files": list(self.files),
+            "nodes": list(self.nodes),
+        }
+
+
 def file_sha256(path: Path, on_progress: Any = None) -> str:
     """Hash a file, optionally reporting bytes read so far.
 
@@ -1039,6 +1186,32 @@ def transfer_phrase(
         f"{verb} {human_bytes(byte_count)} in {seconds:.1f}s "
         f"({human_bytes(rate)}/s{suffix})"
     )
+
+
+_URL_IN_OUTPUT = re.compile(r"\b(https?)://([^\s/]+)(\S*)")
+
+
+def aria2_report_lines(output: str, limit: int = 40) -> list[str]:
+    """The progress summaries and complaints from an aria2c run, URLs stripped.
+
+    notice level prints the URI being fetched, and that URI is a presigned R2 link with a
+    signature in its query string. This output is meant to be pasted into a support
+    conversation, so the redaction is done here rather than at the caller - one place to
+    get right.
+
+    The host survives and the scheme does not, which leaves "cdn.example/[redacted]"
+    rather than a URL-shaped string. That is deliberate: the export is guarded by a test
+    that walks every string in it and refuses any containing "http", and a guard like
+    that is only worth having if nothing is allowed to look like an exception. The host
+    is the part with diagnostic value - a WARN naming a host the record does not is a
+    redirect, and that is worth seeing. The scheme never told anyone anything.
+    """
+    kept = [
+        _URL_IN_OUTPUT.sub(r"\2/[redacted]", line).strip()
+        for line in output.splitlines()
+        if "DL:" in line or "WARN" in line or "ERROR" in line
+    ]
+    return kept[-limit:]
 
 
 _NETWORK_FAILURE_MARKERS = (
@@ -1911,6 +2084,11 @@ class JobController:
                 except InstallCancelled:
                     raise
                 except Exception as exc:
+                    # The record for this file is still open. Close it here rather than
+                    # inside _download_file: a failure can leave from any of a dozen
+                    # points in there, and a try/finally around the whole transfer would
+                    # reindent 150 lines to catch what this one line already catches.
+                    diagnostics.fail_in_flight(str(exc))
                     self.add_warning(f"{name}: {exc}")
                     self.update(
                         message=f"{name} failed — skipped; continuing setup…",
@@ -2116,6 +2294,20 @@ class JobController:
         verified_externally = False
         inline_digest: str | None = None
         fetch_phrase = ""
+        transferred = 0
+
+        sampler = RateSampler()
+        record = diagnostics.begin_file(
+            name=name,
+            # The hostname is taken inside; the URL itself is presigned and never stored.
+            url=source_url,
+            size_bytes=expected_size,
+            transport="aria2c" if use_aria2 else "httpx",
+            staging=(
+                "container-disk" if staged_partial is not None else "beside-destination"
+            ),
+            sampler=sampler,
+        )
 
         if use_aria2:
             self.check_cancelled()
@@ -2150,6 +2342,7 @@ class JobController:
                 file_downloaded_bytes=0 if measured is None else start_size,
                 file_total_bytes=0 if measured is None else expected_size,
             )
+            record["progress_measurable"] = measured is not None
             fetch_started = time.monotonic()
             verified_externally = await self._download_with_aria2c(
                 url,
@@ -2163,6 +2356,7 @@ class JobController:
                 expected_size,
                 start_size,
                 enforced_sha,
+                sampler=sampler,
             )
             fetch_seconds = time.monotonic() - fetch_started
             # Same units as start_size, so a resumed file reports only the new bytes.
@@ -2172,9 +2366,8 @@ class JobController:
                 # finished file's extent is exactly its length on any filesystem, so on
                 # the common case - a download that did not resume - this is exact.
                 fetched = partial.stat().st_size if partial.exists() else 0
-            fetch_phrase = transfer_phrase(
-                "aria2c", max(0, fetched - start_size), fetch_seconds
-            )
+            transferred = max(0, fetched - start_size)
+            fetch_phrase = transfer_phrase("aria2c", transferred, fetch_seconds)
         else:
             control = partial.with_name(partial.name + ".aria2")
             if control.exists():
@@ -2268,9 +2461,10 @@ class JobController:
 
             inline_digest = hasher.hexdigest() if hasher is not None else None
             fetch_seconds = time.monotonic() - started
+            transferred = max(0, current - request_started_at)
             fetch_phrase = transfer_phrase(
                 "downloaded",
-                max(0, current - request_started_at),
+                transferred,
                 fetch_seconds,
                 note="hashed inline" if inline_digest is not None else "",
             )
@@ -2308,6 +2502,29 @@ class JobController:
         self._log_file_timing(
             name, source_url, phases, time.monotonic() - file_started
         )
+
+        record["bytes_transferred"] = transferred
+        record["digest"] = (
+            "aria2c-inline"
+            if verified_externally
+            else "skipped-length-only"
+            if not enforced_sha
+            # Not "second-pass" for the httpx path: it hashed the bytes as they streamed
+            # past, and "second pass" is a specific measured thing in this codebase - the
+            # 4m41s read-back. Mislabelling it here would mislead exactly the person
+            # reading this to find where the time went.
+            else "python-inline"
+            if inline_digest is not None
+            else "python-second-pass"
+        )
+        record["fetch_seconds"] = round(fetch_seconds, 1)
+        record["verify_seconds"] = round(verify_seconds, 1)
+        record["place_seconds"] = round(place_seconds, 1)
+        record["total_seconds"] = round(time.monotonic() - file_started, 1)
+        record["average_bytes_per_second"] = round(
+            transferred / fetch_seconds if fetch_seconds > 0.001 else 0.0, 1
+        )
+        diagnostics.finish_file(record)
         return completed
 
     def _existing_twin(
@@ -2489,6 +2706,8 @@ class JobController:
         expected_size: int,
         start_size: int,
         expected_sha: str = "",
+        *,
+        sampler: RateSampler | None = None,
     ) -> bool:
         """Fetch one file on sixteen connections. True when aria2c verified it itself.
 
@@ -2548,6 +2767,10 @@ class JobController:
                         bytes_per_second=0,
                         percent=(index / max(file_count, 1)) * download_ceiling,
                     )
+                    if sampler is not None:
+                        # A flat line of zeros is a meaningful shape for a bug report;
+                        # a gap in the series is not.
+                        sampler.add(time.monotonic() - started, 0.0)
                     continue
 
                 if expected_size:
@@ -2597,6 +2820,11 @@ class JobController:
                     bytes_per_second=speed,
                     percent=overall_fraction * download_ceiling,
                 )
+                if sampler is not None:
+                    # The rate RateWindow just computed for the panel, kept instead of
+                    # thrown away. Not recomputed: two answers to the same question is
+                    # how a diagnostic starts disagreeing with the thing it diagnoses.
+                    sampler.add(time.monotonic() - started, speed)
 
         process = await asyncio.create_subprocess_exec(
             "aria2c",
@@ -2620,8 +2848,12 @@ class JobController:
             "--file-allocation=none",
             "--allow-overwrite=true",
             "--auto-file-renaming=false",
-            "--summary-interval=0",
-            "--console-log-level=warn",
+            # A successful-but-slow download is the exact failure being chased, and its
+            # output used to be read only inside `if process.returncode:` - so the one
+            # run worth reading always threw everything away. A summary every 30s costs
+            # a handful of lines and gives the transfer a shape after the fact.
+            "--summary-interval=30",
+            "--console-log-level=notice",
             # Costs a full second pass over the finished file, not an inline hash. The
             # caller decides whether that is worth paying; empty expected_sha means no.
             *(["--checksum=sha-256=" + expected_sha] if use_checksum else []),
@@ -2664,8 +2896,11 @@ class JobController:
                 raise InstallCancelled()
 
             output, _ = waiter.result()
+            # Decoded once, for both paths. This used to happen inside the failure
+            # branch, which is why a slow success reported nothing at all.
+            text = output.decode(errors="replace") if output else ""
+            diagnostics.note_aria2_lines(aria2_report_lines(text))
             if process.returncode:
-                text = output.decode(errors="replace") if output else ""
                 tail = text[-500:]
 
                 if use_checksum and rejects_checksum_option(text):
@@ -2787,6 +3022,7 @@ class JobController:
         started = time.monotonic()
         clone_seconds = 0.0
         dependencies_seconds = 0.0
+        retried_with_isolation = False
         name = str(node.get("name", "")).strip()
         if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
             raise RuntimeError(f"Unsafe custom node name: {name!r}")
@@ -2927,6 +3163,7 @@ class JobController:
                 # A package whose build backend genuinely is not installed. This costs
                 # the multi-gigabyte download the flag above exists to avoid, which is
                 # why needs_build_isolation refuses to guess.
+                retried_with_isolation = True
                 print(
                     f"10sorLabs launcher: {name}: build backend missing; "
                     f"retrying with build isolation.",
@@ -2954,6 +3191,7 @@ class JobController:
         # One permanent line per node, same purpose and shape as _log_file_timing. This
         # is the measurement that decides whether the per-node pip runs are worth
         # batching into one; guessing at that is how this project got burned before.
+        total_seconds = time.monotonic() - started
         phases = []
         if clone_seconds:
             phases.append(f"cloned in {clone_seconds:.1f}s")
@@ -2962,8 +3200,15 @@ class JobController:
         print(
             f"10sorLabs launcher: {name}: "
             + "".join(f"{phase}, " for phase in phases)
-            + f"total {time.monotonic() - started:.1f}s",
+            + f"total {total_seconds:.1f}s",
             flush=True,
+        )
+        diagnostics.record_node(
+            name=name,
+            clone_seconds=clone_seconds,
+            dependencies_seconds=dependencies_seconds,
+            total_seconds=total_seconds,
+            retried_with_isolation=retried_with_isolation,
         )
 
     async def _install_custom_nodes(self, nodes: list[dict[str, Any]]) -> None:
@@ -3027,6 +3272,14 @@ class JobController:
                 await asyncio.gather(ticker, return_exceptions=True)
 
             if failure is not None:
+                # _install_custom_node records its own timings on the way out, which a
+                # raise skips. Only the caller knows this node ended, so it files the
+                # record - with the phase timings it does not have left at zero.
+                diagnostics.record_node(
+                    name=name,
+                    total_seconds=time.monotonic() - started,
+                    error=str(failure),
+                )
                 self.add_warning(f"{name}: {failure}")
                 self.update(
                     message=f"{name} failed — skipped; continuing setup…",
@@ -3048,6 +3301,7 @@ comfy_service_controller = ComfyServiceController()
 controller = JobController()
 custom_model_controller = CustomModelController()
 custom_node_controller = CustomNodeController()
+diagnostics = Diagnostics()
 
 
 @asynccontextmanager
@@ -3101,6 +3355,17 @@ async def catalog() -> dict[str, Any]:
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
     return controller.state.export()
+
+
+@app.get("/api/diagnostics")
+async def diagnostics_endpoint() -> dict[str, Any]:
+    """What the last fifty transfers actually did, and what the live one is doing.
+
+    No auth, consistent with every other endpoint here - the pod's proxy URL is the
+    boundary. It carries hostnames, byte counts and timings; never a URL and never a
+    path, because the answer to "can you send me this" has to be yes.
+    """
+    return diagnostics.export()
 
 
 @app.post("/api/install/{workflow_id}")
