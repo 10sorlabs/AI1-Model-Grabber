@@ -211,8 +211,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 7
-        assert sum(not item.get("disabled", False) for item in workflows) == 7
+        assert len(workflows) == 4
+        assert sum(not item.get("disabled", False) for item in workflows) == 4
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -223,14 +223,16 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
     enabled = [item for item in catalog["workflows"] if not item.get("disabled")]
 
     assert [item["id"] for item in enabled] == [
-        "image-generation",
-        "krea-2",
         "krea-2-extended",
-        "dataset-generator",
         "image-edit",
         "motion-control",
         "minimax-h3",
     ]
+    assert {
+        "image-generation",
+        "krea-2",
+        "dataset-generator",
+    }.isdisjoint(item["id"] for item in catalog["workflows"])
     assert all(item["files"] for item in enabled)
     assert all(item["custom_nodes"] for item in enabled)
 
@@ -242,41 +244,6 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
             assert file_spec["size_bytes"] > 0
             assert len(file_spec["sha256"]) == 64
             assert file_spec["auth"] in {"none", "huggingface"}
-
-
-def test_krea_2_installer_matches_the_runpod_manifest() -> None:
-    catalog = launcher_app.load_catalog()
-    installer = next(item for item in catalog["workflows"] if item["id"] == "krea-2")
-
-    assert installer["estimated_size"] == "Approx. 18.4 GB"
-    assert [item["destination"] for item in installer["files"]] == [
-        "models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
-        "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
-        "models/vae/qwen_image_vae.safetensors",
-        "models/loras/MysticXXX_KREA2_v3.safetensors",
-        "models/loras/pawg_krea2.safetensors",
-        "models/loras/RealisticSnapshotKrea2.safetensors",
-        "models/upscale_models/4xNMKDSuperscale_4xNMKDSuperscale.pt",
-        "models/ultralytics/bbox/face_yolov8m.pt",
-        "models/sams/sam_vit_b_01ec64.pth",
-    ]
-    assert [item["name"] for item in installer["custom_nodes"]] == [
-        "rgthree-comfy",
-        "ComfyUI-Impact-Pack",
-        "ComfyUI-Impact-Subpack",
-        "ComfyUI-KJNodes",
-        "RES4LYF",
-    ]
-
-    res4lyf_refs = {
-        node["ref"]
-        for workflow in catalog["workflows"]
-        for node in workflow.get("custom_nodes", [])
-        if node["name"] == "RES4LYF"
-    }
-    assert res4lyf_refs == {
-        "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
-    }
 
 
 def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
@@ -340,8 +307,6 @@ def test_local_windows_installers_match_the_catalog() -> None:
     catalog = launcher_app.load_catalog()
     workflows = {item["id"]: item for item in catalog["workflows"]}
     installers = {
-        "dataset_generator_model_installer.bat": "dataset-generator",
-        "krea2_model_installer.bat": "krea-2",
         "minimax_h3_model_installer.bat": "minimax-h3",
     }
 
@@ -1161,7 +1126,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 7
+    assert len(launcher_app.load_catalog()["workflows"]) == 4
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1174,19 +1139,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 7
+    assert len(launcher_app.load_catalog()["workflows"]) == 4
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 4
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 4
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1252,7 +1217,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 7
+        assert len(catalog["workflows"]) == 4
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1287,7 +1252,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 4
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
