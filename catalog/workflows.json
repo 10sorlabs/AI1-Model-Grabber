@@ -1,5 +1,5 @@
 {
-  "version": 10,
+  "version": 11,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -310,7 +310,7 @@
         {
           "name": "ComfyUI-Logic",
           "repo": "https://github.com/theUpsider/ComfyUI-Logic.git",
-          "ref": "214cfba933291be224156d37bc30c25742076b44",
+          "ref": "ae0ca532177eef7325d207f8b8a2f88f4d1a837c",
           "install_requirements": true
         },
         {
