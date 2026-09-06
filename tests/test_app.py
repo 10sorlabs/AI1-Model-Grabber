@@ -299,6 +299,20 @@ def test_motion_control_installer_matches_the_wan_manifest() -> None:
         "models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
         "models/text_encoders/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
     ]
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "ComfyUI-SAM3",
+        "ComfyUI-VideoHelperSuite",
+        "ComfyUI-Logic",
+        "Nvidia_RTX_Nodes_ComfyUI",
+        "ComfyUI-Easy-Use",
+        "ComfyUI-Custom-Scripts",
+        "ComfyUI-Impact-Pack",
+    ]
+    nvidia = next(
+        item for item in installer["custom_nodes"]
+        if item["name"] == "Nvidia_RTX_Nodes_ComfyUI"
+    )
+    assert nvidia["requirements_extra_index_url"] == "https://pypi.nvidia.com/"
 
 
 def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:

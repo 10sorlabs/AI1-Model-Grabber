@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -202,7 +202,7 @@
         {
           "name": "ComfyUI-Easy-Use",
           "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
-          "ref": "595e0738a9e3f8d0d9c4d875461b2d2c9e7559c7",
+          "ref": "271685698b0935c5b0ecca86a58c3817931cd205",
           "install_requirements": true
         },
         {
@@ -216,7 +216,7 @@
     {
       "id": "motion-control",
       "title": "WAN Motion Control",
-      "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE and SAM 3.1.",
+      "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE, SAM 3.1 and seven supporting custom-node packs.",
       "badge": "READY",
       "accent": "#5271ff",
       "estimated_size": "Approx. 45.4 GB",
@@ -305,6 +305,37 @@
           "name": "ComfyUI-VideoHelperSuite",
           "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
           "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Logic",
+          "repo": "https://github.com/theUpsider/ComfyUI-Logic.git",
+          "ref": "214cfba933291be224156d37bc30c25742076b44",
+          "install_requirements": true
+        },
+        {
+          "name": "Nvidia_RTX_Nodes_ComfyUI",
+          "repo": "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI.git",
+          "ref": "892515e3eb9a4920a131a502a047e47adca9eb0d",
+          "install_requirements": true,
+          "requirements_extra_index_url": "https://pypi.nvidia.com/"
+        },
+        {
+          "name": "ComfyUI-Easy-Use",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
+          "ref": "271685698b0935c5b0ecca86a58c3817931cd205",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Custom-Scripts",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
+          "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Impact-Pack",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
+          "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
           "install_requirements": true
         }
       ]
