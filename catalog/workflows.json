@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "workflows": [
     {
       "id": "image-generation",
@@ -210,7 +210,7 @@
     {
       "id": "krea-2-extended",
       "title": "Krea 2 Extended",
-      "description": "Install the extended Krea 2 model stack, six workflow LoRAs, upscaler, detection models and six supporting custom-node packs.",
+      "description": "Install the extended Krea 2 model stack, six workflow LoRAs, upscaler, detection models and seven supporting custom-node packs.",
       "badge": "READY",
       "accent": "#5271ff",
       "estimated_size": "Approx. 25.4 GB",
@@ -347,6 +347,12 @@
           "name": "rgthree-comfy",
           "repo": "https://github.com/rgthree/rgthree-comfy.git",
           "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "install_requirements": true
+        },
+        {
+          "name": "RES4LYF",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
+          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
           "install_requirements": true
         }
       ]

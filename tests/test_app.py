@@ -308,6 +308,7 @@ def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
         "ComfyUI-Impact-Subpack",
         "ComfyUI-Impact-Pack",
         "rgthree-comfy",
+        "RES4LYF",
     ]
     assert all(re.fullmatch(r"[0-9a-f]{40}", node["ref"]) for node in installer["custom_nodes"])
 
