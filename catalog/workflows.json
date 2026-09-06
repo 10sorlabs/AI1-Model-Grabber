@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -215,11 +215,11 @@
     },
     {
       "id": "motion-control",
-      "title": "Motion Control",
-      "description": "Install the Wan SCAIL and SAM3 model stack for motion control.",
+      "title": "WAN Motion Control",
+      "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE and SAM 3.1.",
       "badge": "READY",
       "accent": "#5271ff",
-      "estimated_size": "Approx. 26.5 GB",
+      "estimated_size": "Approx. 45.4 GB",
       "files": [
         {
           "name": "SAM 3.1 Multiplex",
@@ -238,11 +238,11 @@
           "auth": "none"
         },
         {
-          "name": "Wan 2.1 SCAIL 2 FP8",
-          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors",
-          "destination": "models/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors",
-          "size_bytes": 17694586857,
-          "sha256": "11513b4697ecf566de0cb74660c478f301fb6699a62b10369e91a6ed0fd6b083",
+          "name": "Wan 2.1 SCAIL 2 FP16",
+          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+          "destination": "models/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+          "size_bytes": 32794040328,
+          "sha256": "e3f9cd52184949ee8ffdc01ba14de4c619e0ddfa09ae105cb7efce5c8dc9fe43",
           "auth": "none"
         },
         {
@@ -254,17 +254,41 @@
           "auth": "none"
         },
         {
-          "name": "Wan LightX2V LoRA",
-          "url": "https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/resolve/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
-          "destination": "models/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+          "name": "Wan 2.2 I2V LightX2V 4-step LoRA",
+          "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/9ff6e8a86c2fcc7548256555ba274ecec69fefff/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+          "destination": "models/loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
           "size_bytes": 739472104,
           "sha256": "8833bd4fd7c8eabebf0bc8ee5cfaf47f4f310ce116928a02c1adf8941dd4b0f1",
           "auth": "none"
         },
         {
-          "name": "UMT5 XXL text encoder",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-          "destination": "models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "name": "Slop Twerk Low Noise LoRA",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_LowNoise_merged3_7_v2.safetensors",
+          "destination": "models/loras/slop_twerk_LowNoise_merged3_7_v2.safetensors",
+          "size_bytes": 306847576,
+          "sha256": "d70d23144d43ee6d7ffbd3d2d5cade1f0f9004a3e013a7c33dd2f91f37e438ea",
+          "auth": "none"
+        },
+        {
+          "name": "Slop Twerk High Noise LoRA",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_HighNoise_merged3_7_v2.safetensors",
+          "destination": "models/loras/slop_twerk_HighNoise_merged3_7_v2.safetensors",
+          "size_bytes": 306847584,
+          "sha256": "83fe88476f551aa0acdd119c6993de30910139b1635dc08c7f986fc3459d7cc5",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.1 SCAIL 2 DPO LoRA",
+          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+          "destination": "models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+          "size_bytes": 1226936552,
+          "sha256": "b106522036f64e50f5f8ae3b808973515ff442cc2fac27b65d875eafb95b89e2",
+          "auth": "none"
+        },
+        {
+          "name": "UMT5 XXL FP8 text encoder",
+          "url": "https://huggingface.co/UmeAiRT/ComfyUI-Auto-Installer-Assets/resolve/refs%2Fpr%2F5/models/clip/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
+          "destination": "models/text_encoders/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
           "size_bytes": 6735906897,
           "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
           "auth": "none"

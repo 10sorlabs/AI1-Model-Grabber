@@ -280,6 +280,27 @@ def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
     assert all(re.fullmatch(r"[0-9a-f]{40}", node["ref"]) for node in installer["custom_nodes"])
 
 
+def test_motion_control_installer_matches_the_wan_manifest() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "motion-control"
+    )
+
+    assert installer["estimated_size"] == "Approx. 45.4 GB"
+    assert sum(item["size_bytes"] for item in installer["files"]) == 45_373_632_603
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/checkpoints/sam3.1_multiplex_fp16.safetensors",
+        "models/clip_vision/clip_vision_h.safetensors",
+        "models/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+        "models/vae/wan_2.1_vae.safetensors",
+        "models/loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+        "models/loras/slop_twerk_LowNoise_merged3_7_v2.safetensors",
+        "models/loras/slop_twerk_HighNoise_merged3_7_v2.safetensors",
+        "models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+        "models/text_encoders/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
+    ]
+
+
 def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
     catalog = launcher_app.load_catalog()
     installer = next(
