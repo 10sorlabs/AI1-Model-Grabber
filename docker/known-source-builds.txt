@@ -11,3 +11,7 @@ sam2   # VCS requirement of ComfyUI-Impact-Pack. Handled at runtime by --no-buil
 
 dlib   # sdist only; PyPI has no wheel for any Python. Built into the image by its own
        # pinned Dockerfile layer so no pod ever compiles it.
+
+nvidia-vfx  # NVIDIA wheel-stub used by Nvidia_RTX_Nodes_ComfyUI. The catalog supplies
+            # https://pypi.nvidia.com/ and the launcher uses --no-build-isolation, so the
+            # stub selects NVIDIA's prebuilt CPython 3.12 manylinux x86_64 wheel.

@@ -211,8 +211,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 6
-        assert sum(not item.get("disabled", False) for item in workflows) == 6
+        assert len(workflows) == 7
+        assert sum(not item.get("disabled", False) for item in workflows) == 7
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -225,6 +225,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
     assert [item["id"] for item in enabled] == [
         "image-generation",
         "krea-2",
+        "krea-2-extended",
         "dataset-generator",
         "image-edit",
         "motion-control",
@@ -276,6 +277,51 @@ def test_krea_2_installer_matches_the_runpod_manifest() -> None:
     assert res4lyf_refs == {
         "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
     }
+
+
+def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "krea-2-extended"
+    )
+
+    assert installer["estimated_size"] == "Approx. 25.0 GB"
+    assert sum(item["size_bytes"] for item in installer["files"]) == 24_991_026_245
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+        "models/loras/krea2_identity_edit_v1_2.safetensors",
+        "models/loras/snofs_krea_v1_4.safetensors",
+        "models/loras/krea2-bloomgirls-realism-step00004000.safetensors",
+        "models/loras/ass_v2_krea2_loraholic.safetensors",
+        "models/loras/breast_size_v2_krea2_loraholic.safetensors",
+        "models/loras/famegrid_spicy.safetensors",
+        "models/upscale_models/4xNMKDSuperscale_4xNMKDSuperscale.pt",
+        "models/text_encoders/Qwen-3-VL-4B-Scaled-FP8.safetensors",
+        "models/vae/Qwen_Image-VAE.safetensors",
+    ]
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "ComfyUI_Comfyroll_CustomNodes",
+        "ComfyUI-KJNodes",
+        "comfyui-krea2edit",
+        "RES4LYF",
+        "rgthree-comfy",
+        "ComfyUI_LayerStyle",
+        "comfyui-propost",
+        "ComfyUI-Crystools",
+        "was-node-suite-comfyui",
+        "ComfyUI-Impact-Subpack",
+        "ComfyUI-Impact-Pack",
+        "ComfyUI-Custom-Scripts",
+        "ComfyUI-Easy-Use",
+        "ComfyUI-VideoHelperSuite",
+        "Nvidia_RTX_Nodes_ComfyUI",
+        "ComfyUI-Logic",
+    ]
+    assert all(re.fullmatch(r"[0-9a-f]{40}", node["ref"]) for node in installer["custom_nodes"])
+    nvidia_node = next(
+        node for node in installer["custom_nodes"] if node["name"] == "Nvidia_RTX_Nodes_ComfyUI"
+    )
+    assert nvidia_node["requirements_extra_index_url"] == "https://pypi.nvidia.com/"
 
 
 def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
@@ -1126,7 +1172,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 6
+    assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1139,19 +1185,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 6
+    assert len(launcher_app.load_catalog()["workflows"]) == 7
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1217,7 +1263,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 6
+        assert len(catalog["workflows"]) == 7
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1252,7 +1298,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
@@ -4343,7 +4389,7 @@ def test_a_network_failure_wins_even_when_it_mentions_a_module() -> None:
     )
 
 
-def custom_node_pip_argv(tmp_path, monkeypatch, outputs):
+def custom_node_pip_argv(tmp_path, monkeypatch, outputs, node_overrides=None):
     """Drive _install_custom_node's dependency step and return every pip argv it ran.
 
     `outputs` is one (returncode, output) per pip attempt, so a test can make the first
@@ -4379,6 +4425,7 @@ def custom_node_pip_argv(tmp_path, monkeypatch, outputs):
         "ref": "a" * 40,
         "install_requirements": True,
     }
+    node.update(node_overrides or {})
     failure = None
     try:
         asyncio.run(controller._install_custom_node(node))
@@ -4402,6 +4449,20 @@ def test_the_custom_node_pip_builds_against_what_is_already_installed(
     assert argv[argv.index("--retries") + 1] == "3"
     # Still installing from the file, not from a name list.
     assert argv[-2] == "-r"
+
+
+def test_a_catalog_node_can_use_the_nvidia_package_index(tmp_path, monkeypatch) -> None:
+    pip_runs, failure = custom_node_pip_argv(
+        tmp_path,
+        monkeypatch,
+        [(0, "")],
+        {"requirements_extra_index_url": "https://pypi.nvidia.com/"},
+    )
+
+    assert failure is None
+    assert pip_runs[0][pip_runs[0].index("--extra-index-url") + 1] == (
+        "https://pypi.nvidia.com/"
+    )
 
 
 def test_a_missing_backend_retries_once_with_isolation_restored(
@@ -5172,7 +5233,7 @@ def test_a_listed_source_build_does_not_fail_the_run(tmp_path) -> None:
 def test_the_shipped_allowlist_says_how_each_source_build_is_paid_for() -> None:
     allowed = audit_script.read_known_source_builds(audit_script.KNOWN_SOURCE_BUILDS)
 
-    assert set(allowed) == {"sam2", "dlib"}
+    assert set(allowed) == {"sam2", "dlib", "nvidia-vfx"}
     assert all(reason for reason in allowed.values())
 
 
