@@ -296,8 +296,8 @@ def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
         "models/loras/breast_size_v2_krea2_loraholic.safetensors",
         "models/loras/famegrid_spicy.safetensors",
         "models/upscale_models/4xNMKDSuperscale_4xNMKDSuperscale.pt",
-        "models/text_encoders/Qwen-3-VL-4B-Scaled-FP8.safetensors",
-        "models/vae/Qwen_Image-VAE.safetensors",
+        "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+        "models/vae/qwen_image_vae.safetensors",
     ]
     assert [item["name"] for item in installer["custom_nodes"]] == [
         "ComfyUI_Comfyroll_CustomNodes",
