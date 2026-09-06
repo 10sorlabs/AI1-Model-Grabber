@@ -1,4 +1,4 @@
-# Python dependencies for the twelve custom-node repos in catalog/workflows.json.
+# Python dependencies used to warm the custom-node installs in catalog/workflows.json.
 #
 # Derived, not recalled: every entry below was read from that repo's
 # requirements.txt fetched at the exact commit pinned in the catalog, never at HEAD.

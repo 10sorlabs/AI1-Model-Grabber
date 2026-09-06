@@ -3994,6 +3994,14 @@ class JobController:
             pip = COMFYUI_VENV / "bin" / "python"
             if not pip.exists():
                 pip = Path("python3.12")
+            extra_index_url = str(node.get("requirements_extra_index_url") or "").strip()
+            if extra_index_url and extra_index_url != "https://pypi.nvidia.com/":
+                raise RuntimeError(
+                    f"Unsupported Python package index for {name}: {extra_index_url}"
+                )
+            network_args = ["--timeout", "15", "--retries", "3"]
+            if extra_index_url:
+                network_args.extend(["--extra-index-url", extra_index_url])
             returncode, output = await self._run_process(
                 pip,
                 "-m",
@@ -4014,10 +4022,7 @@ class JobController:
                 # The venv has include-system-site-packages = true - confirmed on the pod
                 # by pip resolving torch out of /usr/local/lib/python3.12/dist-packages
                 # from inside it - so the image's preinstalled packages are visible here.
-                "--timeout",
-                "15",
-                "--retries",
-                "3",
+                *network_args,
                 "-r",
                 requirements,
                 timeout=1800,
@@ -4037,10 +4042,7 @@ class JobController:
                     "-m",
                     "pip",
                     "install",
-                    "--timeout",
-                    "15",
-                    "--retries",
-                    "3",
+                    *network_args,
                     "-r",
                     requirements,
                     timeout=1800,
