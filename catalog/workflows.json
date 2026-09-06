@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "workflows": [
     {
       "id": "image-generation",
@@ -282,7 +282,7 @@
         {
           "name": "Qwen3-VL 4B Scaled FP8 text encoder",
           "url": "https://huggingface.co/hfmaster/models-moved/resolve/5b31b4d168315702592e8ee1130c9b794ca22b1c/qwen3vl/Qwen-3-VL-4B-Scaled-FP8.safetensors",
-          "destination": "models/text_encoders/Qwen-3-VL-4B-Scaled-FP8.safetensors",
+          "destination": "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
           "size_bytes": 6020316384,
           "sha256": "35d2897cb1796571616032131f23aabbc85343372cdc7861a560ef3535a4e903",
           "auth": "none"
@@ -290,7 +290,7 @@
         {
           "name": "Qwen Image VAE",
           "url": "https://huggingface.co/QuantStack/Qwen-Image-Edit-GGUF/resolve/5cf642dd2b94af2a558ec06a9dde255c673e1fdf/VAE/Qwen_Image-VAE.safetensors",
-          "destination": "models/vae/Qwen_Image-VAE.safetensors",
+          "destination": "models/vae/qwen_image_vae.safetensors",
           "size_bytes": 253806246,
           "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
           "auth": "none"
