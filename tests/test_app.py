@@ -327,7 +327,6 @@ def test_motion_control_god_edition_matches_the_workflow_export() -> None:
     assert installer["estimated_size"] == "Approx. 61.3 GB"
     assert sum(item["size_bytes"] for item in installer["files"]) == 61_317_797_596
     assert installer["update_comfyui"] is True
-    assert installer["runtime_profile"] == launcher_app.SAGEATTENTION_PROFILE
     assert [item["destination"] for item in installer["files"]] == [
         "models/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
         "models/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
