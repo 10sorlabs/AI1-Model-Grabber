@@ -1,5 +1,5 @@
 {
-  "version": 12,
+  "version": 13,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -348,7 +348,6 @@
       "accent": "#ff7a18",
       "estimated_size": "Approx. 61.3 GB",
       "update_comfyui": true,
-      "runtime_profile": "sageattention-cu128-hopper-blackwell",
       "files": [
         {
           "name": "Wan 2.2 Animate 14B BF16",
