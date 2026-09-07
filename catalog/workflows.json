@@ -478,7 +478,7 @@
         {
           "name": "ComfyUI-WanAnimatePreprocess",
           "repo": "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git",
-          "ref": "2fcbcae7eec637fdc712fdec18e6266feb8ba3a7",
+          "ref": "0e0b6a2a555625acf4d4aefb780e27d06937132f",
           "install_requirements": true
         },
         {
