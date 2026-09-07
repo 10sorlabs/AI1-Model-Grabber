@@ -49,6 +49,10 @@ COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstr
 COMFYUI_UPSTREAM = "https://github.com/Comfy-Org/ComfyUI.git"
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
+SAGEATTENTION_PROFILE = "sageattention-cu128-hopper-blackwell"
+SAGEATTENTION_VERSION = "2.2.0"
+SAGEATTENTION_ARCHITECTURES = "9.0;10.0;12.0"
+
 # Resolved once; a file may only use the parallel downloader when this is present.
 ARIA2C_PATH = shutil.which("aria2c")
 # Cleared for the rest of the process the first time an aria2c build refuses
@@ -566,6 +570,41 @@ def _validate_catalog(data: dict[str, Any]) -> None:
         if workflow_id in seen:
             raise RuntimeError(f"Duplicate workflow id: {workflow_id}")
         seen.add(workflow_id)
+
+        profile = workflow.get("runtime_profile")
+        if profile not in {None, "", SAGEATTENTION_PROFILE}:
+            raise RuntimeError(f"Unsupported runtime profile: {profile}")
+
+        links = workflow.get("model_links", [])
+        if not isinstance(links, list):
+            raise RuntimeError(f"Workflow {workflow_id} model_links must be a list.")
+        for link in links:
+            if not isinstance(link, dict):
+                raise RuntimeError(f"Workflow {workflow_id} has an invalid model link.")
+            source = str(link.get("source", ""))
+            destination = str(link.get("destination", ""))
+            source_path = PurePosixPath(source)
+            destination_path = PurePosixPath(destination)
+            if (
+                not source
+                or source_path.is_absolute()
+                or ".." in source_path.parts
+                or "\\" in source
+                or source_path.parts[0] != "models"
+            ):
+                raise RuntimeError(f"Workflow {workflow_id} has an unsafe model link source.")
+            if (
+                not destination
+                or destination_path.is_absolute()
+                or ".." in destination_path.parts
+                or "\\" in destination
+                or destination_path.parts[0] != "custom_nodes"
+            ):
+                raise RuntimeError(
+                    f"Workflow {workflow_id} has an unsafe model link destination."
+                )
+            if source_path.name != destination_path.name:
+                raise RuntimeError(f"Workflow {workflow_id} has a renaming model link.")
 
 
 def load_catalog(fresh: bool = False) -> dict[str, Any]:
@@ -2039,7 +2078,10 @@ class CustomNodeController:
         item.updated_at = utc_now()
 
     async def _run_process(
-        self, *command: str | Path, timeout: float | None = None
+        self,
+        *command: str | Path,
+        timeout: float | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str]:
         """Bounded like JobController._run_process, but it does not watch a cancel event.
 
@@ -2063,6 +2105,7 @@ class CustomNodeController:
             *(str(part) for part in command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=env,
         )
         executable = Path(str(command[0])).name
         started = time.monotonic()
@@ -2816,10 +2859,12 @@ class JobController:
         await self._wait_for_comfyui()
         files = workflow.get("files", [])
         nodes = workflow.get("custom_nodes", [])
+        model_links = workflow.get("model_links", [])
+        runtime_profile = str(workflow.get("runtime_profile", "")).strip()
         should_update_comfyui = bool(workflow.get("update_comfyui"))
-        if not files and not nodes and not should_update_comfyui:
+        if not files and not nodes and not should_update_comfyui and not runtime_profile:
             raise RuntimeError(
-                "This workflow does not define any files, custom nodes or updates."
+                "This workflow does not define any files, custom nodes, runtime profile or updates."
             )
 
         if should_update_comfyui:
@@ -2873,6 +2918,11 @@ class JobController:
 
         if nodes:
             await self._install_custom_nodes(nodes)
+        if model_links:
+            self.update(stage="installing", percent=98, message="Linking workflow models…")
+            await self._apply_model_links(model_links)
+        if runtime_profile:
+            await self._install_runtime_profile(runtime_profile)
 
     async def _download_file(
         self,
@@ -3761,7 +3811,10 @@ class JobController:
         return use_checksum
 
     async def _run_process(
-        self, *command: str | Path, timeout: float | None = None
+        self,
+        *command: str | Path,
+        timeout: float | None = None,
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str]:
         """Run a command to completion; return (exit code, stdout+stderr).
 
@@ -3797,6 +3850,7 @@ class JobController:
             *(str(part) for part in command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=env,
         )
         executable = Path(str(command[0])).name
         started = time.monotonic()
@@ -3845,6 +3899,236 @@ class JobController:
         finally:
             canceller.cancel()
             await asyncio.gather(canceller, return_exceptions=True)
+
+    async def _run_profile_command(
+        self,
+        label: str,
+        *command: str | Path,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        returncode, output = await self._run_process(
+            *command,
+            timeout=timeout,
+            env=env,
+        )
+        if returncode:
+            raise RuntimeError(f"{label} failed: {output[-1000:].strip()}")
+        return output
+
+    async def _apply_model_links(self, links: list[dict[str, Any]]) -> None:
+        """Materialise model aliases needed inside a custom-node checkout.
+
+        The source stays in ComfyUI/models so RapidCache can treat it like every other
+        model. A hard link gives a node that insists on its own private ckpt directory
+        the path it expects without storing the bytes twice.
+        """
+        for link in links:
+            source = safe_destination(str(link.get("source", "")))
+            destination = safe_destination(str(link.get("destination", "")))
+            if not source.is_relative_to((COMFYUI_DIR / "models").resolve()):
+                raise RuntimeError("A model link source must be inside ComfyUI/models.")
+            if not destination.is_relative_to((COMFYUI_DIR / "custom_nodes").resolve()):
+                raise RuntimeError(
+                    "A model link destination must be inside ComfyUI/custom_nodes."
+                )
+            if source.name != destination.name:
+                raise RuntimeError("A model link may not rename its source file.")
+            if not source.is_file():
+                raise RuntimeError(f"Model link source is missing: {source.name}")
+            if destination.exists() and destination.is_dir():
+                raise RuntimeError(f"Model link destination is a directory: {destination}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not await asyncio.to_thread(link_or_copy, source, destination):
+                raise RuntimeError(f"Could not place {source.name} for its custom node.")
+
+    async def _install_runtime_profile(self, profile: str) -> None:
+        """Install one vetted native runtime profile from a catalog identifier.
+
+        This is intentionally an allowlist, not a remotely supplied shell hook. The
+        catalog may select a reviewed profile; it cannot make a pod execute arbitrary
+        commands. SageAttention is compiled on the rented GPU because the launcher is
+        live-updated independently of the Docker image and because its CUDA extension
+        must contain the architectures promised by this tile.
+        """
+        if profile != SAGEATTENTION_PROFILE:
+            raise RuntimeError(f"Unsupported runtime profile: {profile}")
+        if os.name != "posix":
+            raise RuntimeError("The SageAttention runtime profile requires a Linux pod.")
+
+        python = COMFYUI_VENV / "bin" / "python"
+        if not python.exists():
+            python = Path("python3.12")
+
+        compatibility_check = """
+import torch
+if not torch.cuda.is_available():
+    raise SystemExit("no CUDA GPU is available")
+capability = torch.cuda.get_device_capability()
+if capability not in {(9, 0), (10, 0), (12, 0)}:
+    raise SystemExit(f"unsupported GPU compute capability {capability[0]}.{capability[1]}")
+cuda_version = tuple(int(part) for part in (torch.version.cuda or "0").split(".")[:2])
+if cuda_version < (12, 8):
+    raise SystemExit(f"CUDA 12.8 or newer is required; torch reports {torch.version.cuda}")
+print(torch.cuda.get_device_name(), capability, torch.__version__, torch.version.cuda)
+""".strip()
+        self.update(stage="installing", message="Checking GPU support for SageAttention…")
+        await self._run_profile_command(
+            "SageAttention GPU compatibility check",
+            python,
+            "-c",
+            compatibility_check,
+            timeout=60,
+        )
+
+        profile_dir = COMFYUI_DIR / ".10sorlabs" / "runtime-profiles"
+        marker = profile_dir / f"{SAGEATTENTION_PROFILE}.json"
+        signature = {
+            "sageattention": SAGEATTENTION_VERSION,
+            "architectures": SAGEATTENTION_ARCHITECTURES,
+            "onnxruntime_gpu": "1.22.0",
+            "opencv_contrib_python": "4.13.0.92",
+        }
+        verify = """
+import importlib.metadata
+import cv2
+import onnxruntime
+import sageattention
+import triton
+assert importlib.metadata.version("sageattention") == "2.2.0"
+assert importlib.metadata.version("onnxruntime-gpu") == "1.22.0"
+assert importlib.metadata.version("opencv-contrib-python") == "4.13.0.92"
+assert "CUDAExecutionProvider" in onnxruntime.get_available_providers()
+from sageattention import sageattn
+print(sageattention.__file__, triton.__version__)
+""".strip()
+        try:
+            marked = json.loads(marker.read_text(encoding="utf-8")) == signature
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            marked = False
+        if marked:
+            returncode, _ = await self._run_process(python, "-c", verify, timeout=60)
+            if returncode == 0:
+                self.update(message="SageAttention runtime is already ready.")
+                return
+
+        self.update(message="Installing the CUDA 12.8 build toolchain…")
+        await self._run_profile_command(
+            "apt package index update",
+            "apt-get",
+            "update",
+            timeout=900,
+        )
+        await self._run_profile_command(
+            "CUDA build dependency installation",
+            "apt-get",
+            "install",
+            "-y",
+            "--no-install-recommends",
+            "git",
+            "build-essential",
+            "ninja-build",
+            "cuda-nvcc-12-8",
+            "cuda-cudart-dev-12-8",
+            "libcublas-dev-12-8",
+            "libcusparse-dev-12-8",
+            "libcusolver-dev-12-8",
+            timeout=1800,
+        )
+
+        self.update(message="Preparing the ComfyUI Python environment…")
+        await self._run_profile_command(
+            "Python build dependency installation",
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
+            "packaging",
+            "ninja",
+            "nvidia-ml-py",
+            timeout=900,
+        )
+        await self._run_profile_command(
+            "conflicting runtime removal",
+            python,
+            "-m",
+            "pip",
+            "uninstall",
+            "-y",
+            "sageattention",
+            "onnxruntime",
+            "onnxruntime-gpu",
+            "opencv-python",
+            "opencv-python-headless",
+            "opencv-contrib-python",
+            timeout=600,
+        )
+        await self._run_profile_command(
+            "GPU ONNX and OpenCV installation",
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--no-deps",
+            "onnxruntime-gpu==1.22.0",
+            "opencv-contrib-python==4.13.0.92",
+            timeout=1200,
+        )
+
+        cuda_home = Path("/usr/local/cuda")
+        if not (cuda_home / "bin" / "nvcc").exists():
+            cuda_home = Path("/usr/local/cuda-12.8")
+        if not (cuda_home / "bin" / "nvcc").exists():
+            raise RuntimeError("CUDA 12.8 nvcc was installed but could not be found.")
+        build_env = os.environ.copy()
+        build_env.update(
+            {
+                "CUDA_HOME": str(cuda_home),
+                "PATH": f"{cuda_home / 'bin'}:{build_env.get('PATH', '')}",
+                "LD_LIBRARY_PATH": (
+                    f"{cuda_home / 'lib64'}:{build_env.get('LD_LIBRARY_PATH', '')}"
+                ).rstrip(":"),
+                "TORCH_CUDA_ARCH_LIST": SAGEATTENTION_ARCHITECTURES,
+                "MAX_JOBS": "4",
+                "EXT_PARALLEL": "1",
+                "NVCC_APPEND_FLAGS": "--threads 4",
+            }
+        )
+        self.update(message="Compiling SageAttention for H200, B200 and RTX PRO 6000…")
+        await self._run_profile_command(
+            "SageAttention compilation",
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--no-cache-dir",
+            "--no-build-isolation",
+            "--no-deps",
+            f"sageattention=={SAGEATTENTION_VERSION}",
+            timeout=3600,
+            env=build_env,
+        )
+        self.update(message="Verifying SageAttention and GPU ONNX…")
+        await self._run_profile_command(
+            "SageAttention runtime verification",
+            python,
+            "-c",
+            verify,
+            timeout=120,
+            env=build_env,
+        )
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps(signature, sort_keys=True), encoding="utf-8")
+        self.state.restart_required = True
 
     async def _install_custom_node(
         self,

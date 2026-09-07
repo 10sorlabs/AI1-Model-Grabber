@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -336,6 +336,216 @@
           "name": "ComfyUI-Impact-Pack",
           "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
           "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+          "install_requirements": true
+        }
+      ]
+    },
+    {
+      "id": "motion-control-god-edition",
+      "title": "Motion Control GOD Edition",
+      "description": "Install the complete WAN 2.2 Animate motion-control workflow stack with pose and face preprocessing, interpolation, SageAttention 2.2.0 and GPU ONNX acceleration. Tuned for RTX PRO 6000 Blackwell, H200 SXM and B200.",
+      "badge": "GOD EDITION",
+      "accent": "#ff7a18",
+      "estimated_size": "Approx. 61.3 GB",
+      "update_comfyui": true,
+      "runtime_profile": "sageattention-cu128-hopper-blackwell",
+      "files": [
+        {
+          "name": "Wan 2.2 Animate 14B BF16",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
+          "destination": "models/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
+          "size_bytes": 34549787368,
+          "sha256": "7d37cb0120488dec2a061135aa3018426925318a60838c3de935c829abc88667",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.2 Animate relight LoRA",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
+          "destination": "models/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
+          "size_bytes": 1436673432,
+          "sha256": "5f4b6b9d3bc745a86e7bfd511f3880d90cf59c3bded9584d92c028f583fa74a3",
+          "auth": "none"
+        },
+        {
+          "name": "LightX2V T2V 14B CFG distill LoRA",
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
+          "destination": "models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
+          "size_bytes": 2498181128,
+          "sha256": "0bda20598ece84b0b2f2385204e1f2e32b1fd2e2648662021be832fe1f227fab",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.2 I2V LightX2V four-step LoRA",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+          "destination": "models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+          "size_bytes": 1226977424,
+          "sha256": "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.1 Pusa V1 14B LoRA",
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
+          "destination": "models/loras/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
+          "size_bytes": 4907437824,
+          "sha256": "a510b5562e05efa831127bd6a6b3aecf1c4747cffdddcc0b28f88c0667ef1694",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.2 Fun A14B low-noise MPS LoRA",
+          "url": "https://huggingface.co/smegmarip/ComfyUI/resolve/main/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
+          "destination": "models/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
+          "size_bytes": 858457436,
+          "sha256": "0e6ac56c89068386b002b18ab4542207e2c0c431f3c4ac367ae64fece85dd680",
+          "auth": "none"
+        },
+        {
+          "name": "Wan 2.1 VAE BF16",
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
+          "destination": "models/vae/Wan2_1_VAE_bf16.safetensors",
+          "size_bytes": 253806278,
+          "sha256": "1ab9a32cc2c740f6e39d80d367ce5dcc28db8c71b79b28670546b8973e9d75f9",
+          "auth": "none"
+        },
+        {
+          "name": "UMT5 XXL FP16 text encoder",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors",
+          "destination": "models/text_encoders/umt5_xxl_fp16.safetensors",
+          "size_bytes": 11366399385,
+          "sha256": "7b8850f1961e1cf8a77cca4c964a358d303f490833c6c087d0cff4b2f99db2af",
+          "auth": "none"
+        },
+        {
+          "name": "Wan CLIP Vision",
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+          "destination": "models/clip_vision/clip_vision_h.safetensors",
+          "size_bytes": 1264219396,
+          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
+          "auth": "none"
+        },
+        {
+          "name": "YOLOv10m detector",
+          "url": "https://huggingface.co/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx",
+          "destination": "models/detection/yolov10m.onnx",
+          "size_bytes": 61659339,
+          "sha256": "89b526498a6d55f869a6ab52e3a2eb20ad45b3711c1f7de3dd9ca0b399dfd6d7",
+          "auth": "none"
+        },
+        {
+          "name": "ViTPose whole-body ONNX model",
+          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx",
+          "destination": "models/detection/vitpose_h_wholebody_model.onnx",
+          "size_bytes": 420252,
+          "sha256": "f21466cd6c93d0066782ad5923c14a4e6569133def212dc2895c73596c2e553b",
+          "auth": "none"
+        },
+        {
+          "name": "ViTPose whole-body external weights",
+          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin",
+          "destination": "models/detection/vitpose_h_wholebody_data.bin",
+          "size_bytes": 2548958740,
+          "sha256": "f6a9e7cb3a87ed65a098b096029e70150408acfafc3d695019a66b289d7719e1",
+          "auth": "none"
+        },
+        {
+          "name": "SAM 2.1 Hiera Base Plus",
+          "url": "https://huggingface.co/fofr/comfyui/resolve/main/sam2/sam2.1_hiera_base_plus.safetensors",
+          "destination": "models/sams/sam2.1_hiera_base_plus.safetensors",
+          "size_bytes": 323474320,
+          "sha256": "eb4b5f725c8b68205aa05bbe6b27efc628b18b4b9c7b9bb8218991b86b9a4932",
+          "auth": "none"
+        },
+        {
+          "name": "RIFE 4.9 interpolation model",
+          "url": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation/releases/download/models/rife49.pth",
+          "destination": "models/frame_interpolation/rife49.pth",
+          "size_bytes": 21345274,
+          "sha256": "e55fd00f3cc184e3c65961f4bb827a9da022e78eed36b055242c0ac30000d533",
+          "auth": "none"
+        }
+      ],
+      "model_links": [
+        {
+          "source": "models/frame_interpolation/rife49.pth",
+          "destination": "custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/rife49.pth"
+        }
+      ],
+      "custom_nodes": [
+        {
+          "name": "ComfyUI-WanVideoWrapper",
+          "repo": "https://github.com/kijai/ComfyUI-WanVideoWrapper.git",
+          "ref": "b2c8cf969fcf60a38884ea2c29af177ae1f28b29",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-WanAnimatePreprocess",
+          "repo": "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git",
+          "ref": "2fcbcae7eec637fdc712fdec18e6266feb8ba3a7",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-KJNodes",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
+          "ref": "c9869eade9920a1b949de07c4a197156006bcceb",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-segment-anything-2",
+          "repo": "https://github.com/kijai/ComfyUI-segment-anything-2.git",
+          "ref": "c59676b008a76237002926f684d0ca3a9b29ac54",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-VideoHelperSuite",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
+          "ref": "0edce8ef7ce173ac97a3ed3d6f4636029d1a4530",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Frame-Interpolation",
+          "repo": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git",
+          "ref": "a969c01dbccd9e5510641be04eb51fe93f6bfc3d",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Custom-Scripts",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
+          "ref": "aac13aa7ce35b07d43633c3bbe654a38c00d74f5",
+          "install_requirements": true
+        },
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "eadc24ecc8bfc3c80fcc50724c0ebe74489f255b",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Easy-Use",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
+          "ref": "a1b402b4a9c0ddd35c0ac1197579f8f7b121ff3e",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyMath",
+          "repo": "https://github.com/evanspearman/ComfyMath.git",
+          "ref": "c01177221c31b8e5fbc062778fc8254aeb541638",
+          "install_requirements": true
+        },
+        {
+          "name": "comfyui-propost",
+          "repo": "https://github.com/digitaljohn/comfyui-propost.git",
+          "ref": "df6a6d122498f57ad7195d58e07701a501c9dcb6",
+          "install_requirements": true
+        },
+        {
+          "name": "CRT-Nodes",
+          "repo": "https://github.com/PGCRT/CRT-Nodes.git",
+          "ref": "7e277170b525a07fc4a9b6fd1e87ee00ec9628e4",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI_Swwan",
+          "repo": "https://github.com/aining2022/ComfyUI_Swwan.git",
+          "ref": "7cfbebaf850d1ce8eaa3bda63e10597d8864261d",
           "install_requirements": true
         }
       ]

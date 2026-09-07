@@ -146,6 +146,18 @@ Before downloading that preset, the launcher updates from
 `Comfy-Org/ComfyUI:master` and installs its requirements into the ComfyUI Python
 environment. The standard end-of-preset restart then loads the new version.
 
+`runtime_profile` is a closed allowlist for reviewed native setup that cannot be
+expressed as a model or custom-node requirement. The
+`sageattention-cu128-hopper-blackwell` profile compiles SageAttention 2.2.0 for
+compute capabilities 9.0, 10.0 and 12.0, then verifies SageAttention, Triton and
+the CUDA ONNX provider before completing the install. Arbitrary commands from a
+remote catalog are never executed.
+
+`model_links` can expose a catalog model at the private path expected by a custom
+node without downloading or permanently storing it twice. Both `source` and
+`destination` are relative to the ComfyUI directory; the launcher prefers a hard
+link and falls back to a copy when the filesystem does not support one.
+
 Supported file authentication values are `none`, `huggingface`, `civitai` and
 `github`. Corresponding environment names are documented in `.env.example`.
 Download URLs and authentication details are not returned by the public catalog

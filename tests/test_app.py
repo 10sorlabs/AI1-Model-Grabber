@@ -211,8 +211,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 4
-        assert sum(not item.get("disabled", False) for item in workflows) == 4
+        assert len(workflows) == 5
+        assert sum(not item.get("disabled", False) for item in workflows) == 5
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -226,6 +226,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "krea-2-extended",
         "image-edit",
         "motion-control",
+        "motion-control-god-edition",
         "minimax-h3",
     ]
     assert {
@@ -313,6 +314,61 @@ def test_motion_control_installer_matches_the_wan_manifest() -> None:
         if item["name"] == "Nvidia_RTX_Nodes_ComfyUI"
     )
     assert nvidia["requirements_extra_index_url"] == "https://pypi.nvidia.com/"
+
+
+def test_motion_control_god_edition_matches_the_workflow_export() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item
+        for item in catalog["workflows"]
+        if item["id"] == "motion-control-god-edition"
+    )
+
+    assert installer["estimated_size"] == "Approx. 61.3 GB"
+    assert sum(item["size_bytes"] for item in installer["files"]) == 61_317_797_596
+    assert installer["update_comfyui"] is True
+    assert installer["runtime_profile"] == launcher_app.SAGEATTENTION_PROFILE
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
+        "models/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
+        "models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
+        "models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+        "models/loras/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
+        "models/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
+        "models/vae/Wan2_1_VAE_bf16.safetensors",
+        "models/text_encoders/umt5_xxl_fp16.safetensors",
+        "models/clip_vision/clip_vision_h.safetensors",
+        "models/detection/yolov10m.onnx",
+        "models/detection/vitpose_h_wholebody_model.onnx",
+        "models/detection/vitpose_h_wholebody_data.bin",
+        "models/sams/sam2.1_hiera_base_plus.safetensors",
+        "models/frame_interpolation/rife49.pth",
+    ]
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "ComfyUI-WanVideoWrapper",
+        "ComfyUI-WanAnimatePreprocess",
+        "ComfyUI-KJNodes",
+        "ComfyUI-segment-anything-2",
+        "ComfyUI-VideoHelperSuite",
+        "ComfyUI-Frame-Interpolation",
+        "ComfyUI-Custom-Scripts",
+        "rgthree-comfy",
+        "ComfyUI-Easy-Use",
+        "ComfyMath",
+        "comfyui-propost",
+        "CRT-Nodes",
+        "ComfyUI_Swwan",
+    ]
+    assert all(
+        re.fullmatch(r"[0-9a-f]{40}", node["ref"])
+        for node in installer["custom_nodes"]
+    )
+    assert installer["model_links"] == [
+        {
+            "source": "models/frame_interpolation/rife49.pth",
+            "destination": "custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/rife49.pth",
+        }
+    ]
 
 
 def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
@@ -1161,7 +1217,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 4
+    assert len(launcher_app.load_catalog()["workflows"]) == 5
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1174,19 +1230,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 4
+    assert len(launcher_app.load_catalog()["workflows"]) == 5
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 4
+        assert len(launcher_app.load_catalog()["workflows"]) == 5
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 4
+        assert len(launcher_app.load_catalog()["workflows"]) == 5
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1247,12 +1303,36 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
                 ],
             }
         ).encode("utf-8"),
+        json.dumps(
+            {
+                "version": 3,
+                "workflows": [
+                    {"id": "unsafe-profile", "runtime_profile": "run-shell"}
+                ],
+            }
+        ).encode("utf-8"),
+        json.dumps(
+            {
+                "version": 3,
+                "workflows": [
+                    {
+                        "id": "unsafe-link",
+                        "model_links": [
+                            {
+                                "source": "models/rife49.pth",
+                                "destination": "main.py",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ).encode("utf-8"),
     ):
         with catalog_api(body) as base:
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 4
+        assert len(catalog["workflows"]) == 5
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1287,11 +1367,20 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 4
+        assert len(launcher_app.load_catalog()["workflows"]) == 5
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
-    private = {"url", "destination", "sha256", "size_bytes", "auth", "parallel"}
+    private = {
+        "url",
+        "destination",
+        "sha256",
+        "size_bytes",
+        "auth",
+        "parallel",
+        "model_links",
+        "runtime_profile",
+    }
 
     with catalog_api(remote_catalog_bytes()) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
@@ -5677,6 +5766,87 @@ def test_no_canceller_task_survives_a_finished_subprocess() -> None:
         return len(asyncio.all_tasks()) - before
 
     assert asyncio.run(runner()) == 0
+
+
+def test_subprocess_environment_can_pin_a_native_cuda_build() -> None:
+    controller = launcher_app.JobController()
+    environment = os.environ.copy()
+    environment["TEN_SOR_TEST_ARCHES"] = "9.0;10.0;12.0"
+
+    returncode, output = asyncio.run(
+        controller._run_process(
+            sys.executable,
+            "-c",
+            "import os; print(os.environ['TEN_SOR_TEST_ARCHES'])",
+            timeout=30,
+            env=environment,
+        )
+    )
+
+    assert returncode == 0
+    assert output.strip() == "9.0;10.0;12.0"
+
+
+def test_model_link_places_a_custom_node_checkpoint_without_a_second_download(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    source = comfy_dir / "models" / "frame_interpolation" / "rife49.pth"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"rife-model")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    controller = launcher_app.JobController()
+
+    asyncio.run(
+        controller._apply_model_links(
+            [
+                {
+                    "source": "models/frame_interpolation/rife49.pth",
+                    "destination": (
+                        "custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/rife49.pth"
+                    ),
+                }
+            ]
+        )
+    )
+
+    destination = (
+        comfy_dir
+        / "custom_nodes"
+        / "ComfyUI-Frame-Interpolation"
+        / "ckpts"
+        / "rife"
+        / "rife49.pth"
+    )
+    assert destination.read_bytes() == b"rife-model"
+
+
+def test_model_link_cannot_overwrite_comfyui_code(tmp_path, monkeypatch) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    source = comfy_dir / "models" / "frame_interpolation" / "rife49.pth"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"rife-model")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    controller = launcher_app.JobController()
+
+    with pytest.raises(RuntimeError, match="inside ComfyUI/custom_nodes"):
+        asyncio.run(
+            controller._apply_model_links(
+                [
+                    {
+                        "source": "models/frame_interpolation/rife49.pth",
+                        "destination": "main.py",
+                    }
+                ]
+            )
+        )
+
+
+def test_runtime_profiles_are_an_allowlist() -> None:
+    controller = launcher_app.JobController()
+    with pytest.raises(RuntimeError, match="Unsupported runtime profile"):
+        asyncio.run(controller._install_runtime_profile("run-something-from-the-catalog"))
 
 
 def node_clone_harness(tmp_path, monkeypatch, failure, on_word="clone"):
