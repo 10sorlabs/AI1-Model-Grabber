@@ -224,7 +224,6 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
 
     assert [item["id"] for item in enabled] == [
         "krea-2-extended",
-        "image-edit",
         "motion-control",
         "motion-control-god-edition",
         "minimax-h3",
