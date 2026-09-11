@@ -152,68 +152,6 @@
       ]
     },
     {
-      "id": "image-edit",
-      "title": "Image Edit",
-      "description": "Install the FLUX.2 Klein model stack and supporting custom nodes.",
-      "badge": "READY",
-      "accent": "#5271ff",
-      "estimated_size": "Approx. 17.8 GB",
-      "files": [
-        {
-          "name": "FLUX.2 VAE",
-          "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
-          "destination": "models/vae/flux2-vae.safetensors",
-          "size_bytes": 336213556,
-          "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5",
-          "auth": "none"
-        },
-        {
-          "name": "Qwen 3 8B text encoder",
-          "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
-          "destination": "models/clip/qwen_3_8b_fp8mixed.safetensors",
-          "size_bytes": 8664848742,
-          "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
-          "auth": "huggingface"
-        },
-        {
-          "name": "FLUX.2 Klein 9B FP8",
-          "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors",
-          "destination": "models/diffusion_models/flux-2-klein-9b-fp8.safetensors",
-          "size_bytes": 9433061528,
-          "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
-          "auth": "huggingface"
-        },
-        {
-          "name": "BFS Face Swap LoRA",
-          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-          "destination": "models/loras/bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-          "size_bytes": 662729912,
-          "sha256": "70d8aaf332d710b905d5085afaa87c3ef577edffd54ffcfadeb8c47a854f9044",
-          "auth": "none"
-        }
-      ],
-      "custom_nodes": [
-        {
-          "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
-          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Easy-Use",
-          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
-          "ref": "271685698b0935c5b0ecca86a58c3817931cd205",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI_LayerStyle",
-          "repo": "https://github.com/chflame163/ComfyUI_LayerStyle.git",
-          "ref": "02acdc50affb84cd24f341d1fc2d3a9134b2ad3d",
-          "install_requirements": true
-        }
-      ]
-    },
-    {
       "id": "motion-control",
       "title": "WAN Motion Control",
       "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE, SAM 3.1 and seven supporting custom-node packs.",
