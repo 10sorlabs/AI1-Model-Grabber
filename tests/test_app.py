@@ -227,6 +227,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "motion-control",
         "motion-control-god-edition",
         "minimax-h3",
+        "krqw2-1",
     ]
     assert {
         "image-generation",
@@ -234,7 +235,8 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "dataset-generator",
     }.isdisjoint(item["id"] for item in catalog["workflows"])
     assert all(item["files"] for item in enabled)
-    assert all(item["custom_nodes"] for item in enabled)
+    assert all(item["custom_nodes"] for item in enabled if item["id"] != "krqw2-1")
+    assert next(item for item in enabled if item["id"] == "krqw2-1")["custom_nodes"] == []
 
     for installer in enabled:
         for file_spec in installer["files"]:
@@ -243,7 +245,21 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
             assert "workflow" not in destination
             assert file_spec["size_bytes"] > 0
             assert len(file_spec["sha256"]) == 64
-            assert file_spec["auth"] in {"none", "huggingface"}
+            assert file_spec["auth"] in {"none", "huggingface", "civitai"}
+
+
+def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "krqw2-1"
+    )
+
+    assert installer["title"] == "KRQW2.1"
+    assert installer["estimated_size"] == "Approx. 44.3 GB"
+    assert len(installer["files"]) == 7
+    assert sum(item["size_bytes"] for item in installer["files"]) == 44_298_179_946
+    assert installer["custom_nodes"] == []
+    assert {item["auth"] for item in installer["files"]} == {"none", "civitai"}
 
 
 def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
