@@ -1,5 +1,5 @@
 {
-  "version": 14,
+  "version": 15,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -561,7 +561,7 @@
     {
       "id": "krqw2-1",
       "title": "KRQW2.1",
-      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders and Qwen Image 2.1 VAEs.",
+      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders, Qwen Image 2.1 VAEs and four supporting custom-node packs.",
       "badge": "READY",
       "accent": "#5271ff",
       "estimated_size": "Approx. 44.3 GB",
@@ -623,7 +623,32 @@
           "auth": "none"
         }
       ],
-      "custom_nodes": []
+      "custom_nodes": [
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "218d6347dac5b6499ae56dbfeb25cbb6dd203ac5",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Custom-Scripts",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
+          "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-SeedVR2_VideoUpscaler",
+          "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git",
+          "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-Easy-Use",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
+          "ref": "b0b47ca1372117fce575d9e744655344ebff6bef",
+          "install_requirements": true
+        }
+      ]
     }
   ]
 }

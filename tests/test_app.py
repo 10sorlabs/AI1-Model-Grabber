@@ -235,8 +235,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "dataset-generator",
     }.isdisjoint(item["id"] for item in catalog["workflows"])
     assert all(item["files"] for item in enabled)
-    assert all(item["custom_nodes"] for item in enabled if item["id"] != "krqw2-1")
-    assert next(item for item in enabled if item["id"] == "krqw2-1")["custom_nodes"] == []
+    assert all(item["custom_nodes"] for item in enabled)
 
     for installer in enabled:
         for file_spec in installer["files"]:
@@ -258,7 +257,12 @@ def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
     assert installer["estimated_size"] == "Approx. 44.3 GB"
     assert len(installer["files"]) == 7
     assert sum(item["size_bytes"] for item in installer["files"]) == 44_298_179_946
-    assert installer["custom_nodes"] == []
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "rgthree-comfy",
+        "ComfyUI-Custom-Scripts",
+        "ComfyUI-SeedVR2_VideoUpscaler",
+        "ComfyUI-Easy-Use",
+    ]
     assert {item["auth"] for item in installer["files"]} == {"none", "civitai"}
 
 
