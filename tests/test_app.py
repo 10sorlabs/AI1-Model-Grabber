@@ -255,6 +255,7 @@ def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
 
     assert installer["title"] == "KRQW2.1"
     assert installer["estimated_size"] == "Approx. 44.3 GB"
+    assert installer["update_comfyui"] is True
     assert len(installer["files"]) == 7
     assert sum(item["size_bytes"] for item in installer["files"]) == 44_298_179_946
     assert [item["name"] for item in installer["custom_nodes"]] == [

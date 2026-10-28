@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -565,6 +565,7 @@
       "badge": "READY",
       "accent": "#5271ff",
       "estimated_size": "Approx. 44.3 GB",
+      "update_comfyui": true,
       "files": [
         {
           "name": "REDGPT FP8",
