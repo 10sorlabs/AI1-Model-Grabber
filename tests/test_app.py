@@ -263,6 +263,7 @@ def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
         "ComfyUI-Custom-Scripts",
         "ComfyUI-SeedVR2_VideoUpscaler",
         "ComfyUI-Easy-Use",
+        "ComfyUI-10SOR-Regeneration-Gate",
     ]
     assert {item["auth"] for item in installer["files"]} == {"none", "civitai"}
 

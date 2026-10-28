@@ -1,5 +1,5 @@
 {
-  "version": 16,
+  "version": 17,
   "workflows": [
     {
       "id": "krea-2-extended",
@@ -561,7 +561,7 @@
     {
       "id": "krqw2-1",
       "title": "KRQW2.1",
-      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders, Qwen Image 2.1 VAEs and four supporting custom-node packs.",
+      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders, Qwen Image 2.1 VAEs and five supporting custom-node packs.",
       "badge": "READY",
       "accent": "#5271ff",
       "estimated_size": "Approx. 44.3 GB",
@@ -647,6 +647,12 @@
           "name": "ComfyUI-Easy-Use",
           "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
           "ref": "b0b47ca1372117fce575d9e744655344ebff6bef",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI-10SOR-Regeneration-Gate",
+          "repo": "https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git",
+          "ref": "7d891c3c1abb64cd51913816ecf3eeca343574bc",
           "install_requirements": true
         }
       ]
