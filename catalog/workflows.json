@@ -1,661 +1,667 @@
 {
-  "version": 17,
+  "version": 18,
   "workflows": [
     {
-      "id": "krea-2-extended",
-      "title": "Krea 2 Extended",
-      "description": "Install the extended Krea 2 model stack, six workflow LoRAs, upscaler, detection models and seven supporting custom-node packs.",
-      "badge": "READY",
       "accent": "#5271ff",
+      "badge": "READY",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "comfyui-krea2edit",
+          "ref": "86f886dac23013d88996e3a2e99093ba44d322fb",
+          "repo": "https://github.com/lbouaraba/comfyui-krea2edit.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI_Comfyroll_CustomNodes",
+          "ref": "d78b780ae43fcf8c6b7c6505e6ffb4584281ceca",
+          "repo": "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-KJNodes",
+          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Impact-Subpack",
+          "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Impact-Pack",
+          "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "RES4LYF",
+          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git"
+        }
+      ],
+      "description": "Install the extended Krea 2 model stack, six workflow LoRAs, upscaler, detection models and seven supporting custom-node packs.",
       "estimated_size": "Approx. 25.4 GB",
       "files": [
         {
-          "name": "Krea 2 Turbo FP8",
-          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "auth": "none",
           "destination": "models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
-          "size_bytes": 13141730784,
+          "name": "Krea 2 Turbo FP8",
           "sha256": "eb4dd8c612cfd10f64f25b057e6e6bbcb5737c94a7372177e456dbf7579502f1",
-          "auth": "none"
+          "size_bytes": 13141730784,
+          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors"
         },
         {
-          "name": "Krea 2 Identity Edit v1.2 LoRA",
-          "url": "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/krea2_identity_edit_v1_2.safetensors",
+          "auth": "none",
           "destination": "models/loras/krea2_identity_edit_v1_2.safetensors",
-          "size_bytes": 1828256432,
+          "name": "Krea 2 Identity Edit v1.2 LoRA",
           "sha256": "6adf9a69cc9502d286db7b69964d37da7e9cfe4b05b4d004bc275f087d3fd3cf",
-          "auth": "none"
+          "size_bytes": 1828256432,
+          "url": "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/krea2_identity_edit_v1_2.safetensors"
         },
         {
-          "name": "SNOFS Krea v1.4 LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/snofs_krea_v1_4.safetensors",
+          "auth": "none",
           "destination": "models/loras/snofs_krea_v1_4.safetensors",
-          "size_bytes": 1562410296,
+          "name": "SNOFS Krea v1.4 LoRA",
           "sha256": "767888edde83003f14cf930f13f174fe2a7431e252a515ddf04bd93d382a8932",
-          "auth": "none"
+          "size_bytes": 1562410296,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/snofs_krea_v1_4.safetensors"
         },
         {
-          "name": "Krea 2 Bloomgirls Realism LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/krea2-bloomgirls-realism-step00004000.safetensors",
+          "auth": "none",
           "destination": "models/loras/krea2-bloomgirls-realism-step00004000.safetensors",
-          "size_bytes": 469315368,
+          "name": "Krea 2 Bloomgirls Realism LoRA",
           "sha256": "7ff5ed79d0350c7360b1861829257cbd82b7ca0a75adb97c8716dd1327516c72",
-          "auth": "none"
+          "size_bytes": 469315368,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/krea2-bloomgirls-realism-step00004000.safetensors"
         },
         {
-          "name": "Krea 2 ASS v2 LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/ass_v2_krea2_loraholic.safetensors",
+          "auth": "none",
           "destination": "models/loras/ass_v2_krea2_loraholic.safetensors",
-          "size_bytes": 50051752,
+          "name": "Krea 2 ASS v2 LoRA",
           "sha256": "06be93ed343ba85622819f931015c9c6910034cef81208c308fba03590e7ae42",
-          "auth": "none"
+          "size_bytes": 50051752,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/ass_v2_krea2_loraholic.safetensors"
         },
         {
-          "name": "Krea 2 Breast Size v2 LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/breast_size_v2_krea2_loraholic.safetensors",
+          "auth": "none",
           "destination": "models/loras/breast_size_v2_krea2_loraholic.safetensors",
-          "size_bytes": 35769968,
+          "name": "Krea 2 Breast Size v2 LoRA",
           "sha256": "24c2acd5d3bf88920a084984099928c85ed17c985d914b8ceb19a1731aafd07f",
-          "auth": "none"
+          "size_bytes": 35769968,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/breast_size_v2_krea2_loraholic.safetensors"
         },
         {
-          "name": "FameGrid Spicy LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/famegrid_spicy.safetensors",
+          "auth": "none",
           "destination": "models/loras/famegrid_spicy.safetensors",
-          "size_bytes": 1562410408,
+          "name": "FameGrid Spicy LoRA",
           "sha256": "7b4a37a9b9ec3885bf39242f2d4f691f186d959cbaaa30b0630e4631767b425e",
-          "auth": "none"
+          "size_bytes": 1562410408,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/famegrid_spicy.safetensors"
         },
         {
-          "name": "4x NMKD Superscale",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/4xNMKDSuperscale_4xNMKDSuperscale.pt",
+          "auth": "none",
           "destination": "models/upscale_models/4xNMKDSuperscale_4xNMKDSuperscale.pt",
-          "size_bytes": 66958607,
+          "name": "4x NMKD Superscale",
           "sha256": "1d1b0078fe71446e0469d8d4df59e96baa80d83cda600d68237d655830821bcc",
-          "auth": "none"
+          "size_bytes": 66958607,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/4xNMKDSuperscale_4xNMKDSuperscale.pt"
         },
         {
-          "name": "Qwen3-VL 4B Scaled FP8 text encoder",
-          "url": "https://huggingface.co/hfmaster/models-moved/resolve/5b31b4d168315702592e8ee1130c9b794ca22b1c/qwen3vl/Qwen-3-VL-4B-Scaled-FP8.safetensors",
+          "auth": "none",
           "destination": "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
-          "size_bytes": 6020316384,
+          "name": "Qwen3-VL 4B Scaled FP8 text encoder",
           "sha256": "35d2897cb1796571616032131f23aabbc85343372cdc7861a560ef3535a4e903",
-          "auth": "none"
+          "size_bytes": 6020316384,
+          "url": "https://huggingface.co/hfmaster/models-moved/resolve/5b31b4d168315702592e8ee1130c9b794ca22b1c/qwen3vl/Qwen-3-VL-4B-Scaled-FP8.safetensors"
         },
         {
-          "name": "Qwen Image VAE",
-          "url": "https://huggingface.co/QuantStack/Qwen-Image-Edit-GGUF/resolve/5cf642dd2b94af2a558ec06a9dde255c673e1fdf/VAE/Qwen_Image-VAE.safetensors",
+          "auth": "none",
           "destination": "models/vae/qwen_image_vae.safetensors",
-          "size_bytes": 253806246,
+          "name": "Qwen Image VAE",
           "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
-          "auth": "none"
+          "size_bytes": 253806246,
+          "url": "https://huggingface.co/QuantStack/Qwen-Image-Edit-GGUF/resolve/5cf642dd2b94af2a558ec06a9dde255c673e1fdf/VAE/Qwen_Image-VAE.safetensors"
         },
         {
-          "name": "SAM ViT-B",
-          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/sams/sam_vit_b_01ec64.pth",
+          "auth": "none",
           "destination": "models/sams/sam_vit_b_01ec64.pth",
-          "size_bytes": 375042383,
+          "name": "SAM ViT-B",
           "sha256": "ec2df62732614e57411cdcf32a23ffdf28910380d03139ee0f4fcbe91eb8c912",
-          "auth": "none"
+          "size_bytes": 375042383,
+          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/sams/sam_vit_b_01ec64.pth"
         },
         {
-          "name": "Face YOLOv8m",
-          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt",
+          "auth": "none",
           "destination": "models/ultralytics/bbox/face_yolov8m.pt",
-          "size_bytes": 51996128,
+          "name": "Face YOLOv8m",
           "sha256": "e3893a92c5c1907136b6cc75404094db767c1e0cfefe1b43e87dad72af2e4c9f",
-          "auth": "none"
+          "size_bytes": 51996128,
+          "url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/detection/bbox/face_yolov8m.pt"
         }
       ],
-      "custom_nodes": [
-        {
-          "name": "comfyui-krea2edit",
-          "repo": "https://github.com/lbouaraba/comfyui-krea2edit.git",
-          "ref": "86f886dac23013d88996e3a2e99093ba44d322fb",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI_Comfyroll_CustomNodes",
-          "repo": "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes.git",
-          "ref": "d78b780ae43fcf8c6b7c6505e6ffb4584281ceca",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-KJNodes",
-          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
-          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Impact-Subpack",
-          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git",
-          "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Impact-Pack",
-          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
-          "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
-          "install_requirements": true
-        },
-        {
-          "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
-          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
-          "install_requirements": true
-        },
-        {
-          "name": "RES4LYF",
-          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
-          "ref": "e716cd1cb2c5cff90131bf4914b75b75a0489d48",
-          "install_requirements": true
-        }
-      ]
+      "id": "krea-2-extended",
+      "title": "Krea 2 Extended"
     },
     {
-      "id": "motion-control",
-      "title": "WAN Motion Control",
-      "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE, SAM 3.1 and seven supporting custom-node packs.",
-      "badge": "READY",
       "accent": "#5271ff",
-      "estimated_size": "Approx. 45.4 GB",
-      "files": [
-        {
-          "name": "SAM 3.1 Multiplex",
-          "url": "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors",
-          "destination": "models/checkpoints/sam3.1_multiplex_fp16.safetensors",
-          "size_bytes": 1745546848,
-          "sha256": "9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03",
-          "auth": "none"
-        },
-        {
-          "name": "Wan CLIP Vision",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
-          "destination": "models/clip_vision/clip_vision_h.safetensors",
-          "size_bytes": 1264219396,
-          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.1 SCAIL 2 FP16",
-          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
-          "destination": "models/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
-          "size_bytes": 32794040328,
-          "sha256": "e3f9cd52184949ee8ffdc01ba14de4c619e0ddfa09ae105cb7efce5c8dc9fe43",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.1 VAE",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
-          "destination": "models/vae/wan_2.1_vae.safetensors",
-          "size_bytes": 253815318,
-          "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.2 I2V LightX2V 4-step LoRA",
-          "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/9ff6e8a86c2fcc7548256555ba274ecec69fefff/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
-          "destination": "models/loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
-          "size_bytes": 739472104,
-          "sha256": "8833bd4fd7c8eabebf0bc8ee5cfaf47f4f310ce116928a02c1adf8941dd4b0f1",
-          "auth": "none"
-        },
-        {
-          "name": "Slop Twerk Low Noise LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_LowNoise_merged3_7_v2.safetensors",
-          "destination": "models/loras/slop_twerk_LowNoise_merged3_7_v2.safetensors",
-          "size_bytes": 306847576,
-          "sha256": "d70d23144d43ee6d7ffbd3d2d5cade1f0f9004a3e013a7c33dd2f91f37e438ea",
-          "auth": "none"
-        },
-        {
-          "name": "Slop Twerk High Noise LoRA",
-          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_HighNoise_merged3_7_v2.safetensors",
-          "destination": "models/loras/slop_twerk_HighNoise_merged3_7_v2.safetensors",
-          "size_bytes": 306847584,
-          "sha256": "83fe88476f551aa0acdd119c6993de30910139b1635dc08c7f986fc3459d7cc5",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.1 SCAIL 2 DPO LoRA",
-          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
-          "destination": "models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
-          "size_bytes": 1226936552,
-          "sha256": "b106522036f64e50f5f8ae3b808973515ff442cc2fac27b65d875eafb95b89e2",
-          "auth": "none"
-        },
-        {
-          "name": "UMT5 XXL FP8 text encoder",
-          "url": "https://huggingface.co/UmeAiRT/ComfyUI-Auto-Installer-Assets/resolve/refs%2Fpr%2F5/models/clip/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
-          "destination": "models/text_encoders/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
-          "size_bytes": 6735906897,
-          "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
-          "auth": "none"
-        }
-      ],
+      "badge": "READY",
       "custom_nodes": [
         {
-          "name": "ComfyUI-SAM3",
-          "repo": "https://github.com/PozzettiAndrea/ComfyUI-SAM3.git",
-          "ref": "de0ff5d2c2ea435d29f800abfa568cffdfb94773",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-VideoHelperSuite",
-          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
-          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Logic",
-          "repo": "https://github.com/theUpsider/ComfyUI-Logic.git",
-          "ref": "ae0ca532177eef7325d207f8b8a2f88f4d1a837c",
-          "install_requirements": true
-        },
-        {
-          "name": "Nvidia_RTX_Nodes_ComfyUI",
-          "repo": "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI.git",
-          "ref": "892515e3eb9a4920a131a502a047e47adca9eb0d",
           "install_requirements": true,
+          "name": "ComfyUI-SAM3",
+          "ref": "de0ff5d2c2ea435d29f800abfa568cffdfb94773",
+          "repo": "https://github.com/PozzettiAndrea/ComfyUI-SAM3.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-VideoHelperSuite",
+          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Logic",
+          "ref": "ae0ca532177eef7325d207f8b8a2f88f4d1a837c",
+          "repo": "https://github.com/theUpsider/ComfyUI-Logic.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "Nvidia_RTX_Nodes_ComfyUI",
+          "ref": "892515e3eb9a4920a131a502a047e47adca9eb0d",
+          "repo": "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI.git",
           "requirements_extra_index_url": "https://pypi.nvidia.com/"
         },
         {
+          "install_requirements": true,
           "name": "ComfyUI-Easy-Use",
-          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
           "ref": "271685698b0935c5b0ecca86a58c3817931cd205",
-          "install_requirements": true
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
         },
         {
+          "install_requirements": true,
           "name": "ComfyUI-Custom-Scripts",
-          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
           "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
-          "install_requirements": true
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
         },
         {
+          "install_requirements": true,
           "name": "ComfyUI-Impact-Pack",
-          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git",
           "ref": "429d0159ad429e64d2b3916e6e7be9c22d025c3c",
-          "install_requirements": true
-        }
-      ]
-    },
-    {
-      "id": "motion-control-god-edition",
-      "title": "Motion Control GOD Edition",
-      "description": "Install the complete WAN 2.2 Animate motion-control workflow stack with pose and face preprocessing, interpolation, SageAttention 2.2.0 and GPU ONNX acceleration. Tuned for RTX PRO 6000 Blackwell, H200 SXM and B200.",
-      "badge": "GOD EDITION",
-      "accent": "#ff7a18",
-      "estimated_size": "Approx. 61.3 GB",
-      "update_comfyui": true,
-      "files": [
-        {
-          "name": "Wan 2.2 Animate 14B BF16",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
-          "destination": "models/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
-          "size_bytes": 34549787368,
-          "sha256": "7d37cb0120488dec2a061135aa3018426925318a60838c3de935c829abc88667",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.2 Animate relight LoRA",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
-          "destination": "models/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
-          "size_bytes": 1436673432,
-          "sha256": "5f4b6b9d3bc745a86e7bfd511f3880d90cf59c3bded9584d92c028f583fa74a3",
-          "auth": "none"
-        },
-        {
-          "name": "LightX2V T2V 14B CFG distill LoRA",
-          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
-          "destination": "models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
-          "size_bytes": 2498181128,
-          "sha256": "0bda20598ece84b0b2f2385204e1f2e32b1fd2e2648662021be832fe1f227fab",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.2 I2V LightX2V four-step LoRA",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
-          "destination": "models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
-          "size_bytes": 1226977424,
-          "sha256": "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.1 Pusa V1 14B LoRA",
-          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
-          "destination": "models/loras/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
-          "size_bytes": 4907437824,
-          "sha256": "a510b5562e05efa831127bd6a6b3aecf1c4747cffdddcc0b28f88c0667ef1694",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.2 Fun A14B low-noise MPS LoRA",
-          "url": "https://huggingface.co/smegmarip/ComfyUI/resolve/main/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
-          "destination": "models/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
-          "size_bytes": 858457436,
-          "sha256": "0e6ac56c89068386b002b18ab4542207e2c0c431f3c4ac367ae64fece85dd680",
-          "auth": "none"
-        },
-        {
-          "name": "Wan 2.1 VAE BF16",
-          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
-          "destination": "models/vae/Wan2_1_VAE_bf16.safetensors",
-          "size_bytes": 253806278,
-          "sha256": "1ab9a32cc2c740f6e39d80d367ce5dcc28db8c71b79b28670546b8973e9d75f9",
-          "auth": "none"
-        },
-        {
-          "name": "UMT5 XXL FP16 text encoder",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors",
-          "destination": "models/text_encoders/umt5_xxl_fp16.safetensors",
-          "size_bytes": 11366399385,
-          "sha256": "7b8850f1961e1cf8a77cca4c964a358d303f490833c6c087d0cff4b2f99db2af",
-          "auth": "none"
-        },
-        {
-          "name": "Wan CLIP Vision",
-          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
-          "destination": "models/clip_vision/clip_vision_h.safetensors",
-          "size_bytes": 1264219396,
-          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
-          "auth": "none"
-        },
-        {
-          "name": "YOLOv10m detector",
-          "url": "https://huggingface.co/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx",
-          "destination": "models/detection/yolov10m.onnx",
-          "size_bytes": 61659339,
-          "sha256": "89b526498a6d55f869a6ab52e3a2eb20ad45b3711c1f7de3dd9ca0b399dfd6d7",
-          "auth": "none"
-        },
-        {
-          "name": "ViTPose whole-body ONNX model",
-          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx",
-          "destination": "models/detection/vitpose_h_wholebody_model.onnx",
-          "size_bytes": 420252,
-          "sha256": "f21466cd6c93d0066782ad5923c14a4e6569133def212dc2895c73596c2e553b",
-          "auth": "none"
-        },
-        {
-          "name": "ViTPose whole-body external weights",
-          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin",
-          "destination": "models/detection/vitpose_h_wholebody_data.bin",
-          "size_bytes": 2548958740,
-          "sha256": "f6a9e7cb3a87ed65a098b096029e70150408acfafc3d695019a66b289d7719e1",
-          "auth": "none"
-        },
-        {
-          "name": "SAM 2.1 Hiera Base Plus",
-          "url": "https://huggingface.co/fofr/comfyui/resolve/main/sam2/sam2.1_hiera_base_plus.safetensors",
-          "destination": "models/sams/sam2.1_hiera_base_plus.safetensors",
-          "size_bytes": 323474320,
-          "sha256": "eb4b5f725c8b68205aa05bbe6b27efc628b18b4b9c7b9bb8218991b86b9a4932",
-          "auth": "none"
-        },
-        {
-          "name": "RIFE 4.9 interpolation model",
-          "url": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation/releases/download/models/rife49.pth",
-          "destination": "models/frame_interpolation/rife49.pth",
-          "size_bytes": 21345274,
-          "sha256": "e55fd00f3cc184e3c65961f4bb827a9da022e78eed36b055242c0ac30000d533",
-          "auth": "none"
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
         }
       ],
+      "description": "Install the complete WAN SCAIL 2 FP16 motion-control stack, including acceleration and motion LoRAs, CLIP Vision, UMT5, VAE, SAM 3.1 and seven supporting custom-node packs.",
+      "estimated_size": "Approx. 45.4 GB",
+      "files": [
+        {
+          "auth": "none",
+          "destination": "models/checkpoints/sam3.1_multiplex_fp16.safetensors",
+          "name": "SAM 3.1 Multiplex",
+          "sha256": "9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03",
+          "size_bytes": 1745546848,
+          "url": "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/clip_vision/clip_vision_h.safetensors",
+          "name": "Wan CLIP Vision",
+          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
+          "size_bytes": 1264219396,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors",
+          "name": "Wan 2.1 SCAIL 2 FP16",
+          "sha256": "e3f9cd52184949ee8ffdc01ba14de4c619e0ddfa09ae105cb7efce5c8dc9fe43",
+          "size_bytes": 32794040328,
+          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/wan_2.1_vae.safetensors",
+          "name": "Wan 2.1 VAE",
+          "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
+          "size_bytes": 253815318,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+          "name": "Wan 2.2 I2V LightX2V 4-step LoRA",
+          "sha256": "8833bd4fd7c8eabebf0bc8ee5cfaf47f4f310ce116928a02c1adf8941dd4b0f1",
+          "size_bytes": 739472104,
+          "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/9ff6e8a86c2fcc7548256555ba274ecec69fefff/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/slop_twerk_LowNoise_merged3_7_v2.safetensors",
+          "name": "Slop Twerk Low Noise LoRA",
+          "sha256": "d70d23144d43ee6d7ffbd3d2d5cade1f0f9004a3e013a7c33dd2f91f37e438ea",
+          "size_bytes": 306847576,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_LowNoise_merged3_7_v2.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/slop_twerk_HighNoise_merged3_7_v2.safetensors",
+          "name": "Slop Twerk High Noise LoRA",
+          "sha256": "83fe88476f551aa0acdd119c6993de30910139b1635dc08c7f986fc3459d7cc5",
+          "size_bytes": 306847584,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/slop_twerk_HighNoise_merged3_7_v2.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors",
+          "name": "Wan 2.1 SCAIL 2 DPO LoRA",
+          "sha256": "b106522036f64e50f5f8ae3b808973515ff442cc2fac27b65d875eafb95b89e2",
+          "size_bytes": 1226936552,
+          "url": "https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors",
+          "name": "UMT5 XXL FP8 text encoder",
+          "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+          "size_bytes": 6735906897,
+          "url": "https://huggingface.co/UmeAiRT/ComfyUI-Auto-Installer-Assets/resolve/refs%2Fpr%2F5/models/clip/umt5-xxl-encoder-fp8-e4m3fn-scaled.safetensors"
+        }
+      ],
+      "id": "motion-control",
+      "title": "WAN Motion Control"
+    },
+    {
+      "accent": "#ff7a18",
+      "badge": "GOD EDITION",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-WanVideoWrapper",
+          "ref": "b2c8cf969fcf60a38884ea2c29af177ae1f28b29",
+          "repo": "https://github.com/kijai/ComfyUI-WanVideoWrapper.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-WanAnimatePreprocess",
+          "ref": "0e0b6a2a555625acf4d4aefb780e27d06937132f",
+          "repo": "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-KJNodes",
+          "ref": "c9869eade9920a1b949de07c4a197156006bcceb",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-segment-anything-2",
+          "ref": "c59676b008a76237002926f684d0ca3a9b29ac54",
+          "repo": "https://github.com/kijai/ComfyUI-segment-anything-2.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-VideoHelperSuite",
+          "ref": "0edce8ef7ce173ac97a3ed3d6f4636029d1a4530",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Frame-Interpolation",
+          "ref": "a969c01dbccd9e5510641be04eb51fe93f6bfc3d",
+          "repo": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Custom-Scripts",
+          "ref": "aac13aa7ce35b07d43633c3bbe654a38c00d74f5",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "eadc24ecc8bfc3c80fcc50724c0ebe74489f255b",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Easy-Use",
+          "ref": "a1b402b4a9c0ddd35c0ac1197579f8f7b121ff3e",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyMath",
+          "ref": "c01177221c31b8e5fbc062778fc8254aeb541638",
+          "repo": "https://github.com/evanspearman/ComfyMath.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "comfyui-propost",
+          "ref": "df6a6d122498f57ad7195d58e07701a501c9dcb6",
+          "repo": "https://github.com/digitaljohn/comfyui-propost.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "CRT-Nodes",
+          "ref": "7e277170b525a07fc4a9b6fd1e87ee00ec9628e4",
+          "repo": "https://github.com/PGCRT/CRT-Nodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI_Swwan",
+          "ref": "7cfbebaf850d1ce8eaa3bda63e10597d8864261d",
+          "repo": "https://github.com/aining2022/ComfyUI_Swwan.git"
+        }
+      ],
+      "description": "Install the complete WAN 2.2 Animate motion-control workflow stack with pose and face preprocessing, interpolation, SageAttention 2.2.0 and GPU ONNX acceleration. Tuned for RTX PRO 6000 Blackwell, H200 SXM and B200.",
+      "estimated_size": "Approx. 61.3 GB",
+      "files": [
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/wan2.2_animate_14B_bf16.safetensors",
+          "name": "Wan 2.2 Animate 14B BF16",
+          "sha256": "7d37cb0120488dec2a061135aa3018426925318a60838c3de935c829abc88667",
+          "size_bytes": 34549787368,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_animate_14B_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors",
+          "name": "Wan 2.2 Animate relight LoRA",
+          "sha256": "5f4b6b9d3bc745a86e7bfd511f3880d90cf59c3bded9584d92c028f583fa74a3",
+          "size_bytes": 1436673432,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_animate_14B_relight_lora_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors",
+          "name": "LightX2V T2V 14B CFG distill LoRA",
+          "sha256": "0bda20598ece84b0b2f2385204e1f2e32b1fd2e2648662021be832fe1f227fab",
+          "size_bytes": 2498181128,
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank256_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+          "name": "Wan 2.2 I2V LightX2V four-step LoRA",
+          "sha256": "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9",
+          "size_bytes": 1226977424,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors",
+          "name": "Wan 2.1 Pusa V1 14B LoRA",
+          "sha256": "a510b5562e05efa831127bd6a6b3aecf1c4747cffdddcc0b28f88c0667ef1694",
+          "size_bytes": 4907437824,
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Pusa/Wan21_PusaV1_LoRA_14B_rank512_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors",
+          "name": "Wan 2.2 Fun A14B low-noise MPS LoRA",
+          "sha256": "0e6ac56c89068386b002b18ab4542207e2c0c431f3c4ac367ae64fece85dd680",
+          "size_bytes": 858457436,
+          "url": "https://huggingface.co/smegmarip/ComfyUI/resolve/main/loras/Wan2.2-Fun-A14B-InP-low-noise-MPS.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/Wan2_1_VAE_bf16.safetensors",
+          "name": "Wan 2.1 VAE BF16",
+          "sha256": "1ab9a32cc2c740f6e39d80d367ce5dcc28db8c71b79b28670546b8973e9d75f9",
+          "size_bytes": 253806278,
+          "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/umt5_xxl_fp16.safetensors",
+          "name": "UMT5 XXL FP16 text encoder",
+          "sha256": "7b8850f1961e1cf8a77cca4c964a358d303f490833c6c087d0cff4b2f99db2af",
+          "size_bytes": 11366399385,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/clip_vision/clip_vision_h.safetensors",
+          "name": "Wan CLIP Vision",
+          "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161",
+          "size_bytes": 1264219396,
+          "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/detection/yolov10m.onnx",
+          "name": "YOLOv10m detector",
+          "sha256": "89b526498a6d55f869a6ab52e3a2eb20ad45b3711c1f7de3dd9ca0b399dfd6d7",
+          "size_bytes": 61659339,
+          "url": "https://huggingface.co/Wan-AI/Wan2.2-Animate-14B/resolve/main/process_checkpoint/det/yolov10m.onnx"
+        },
+        {
+          "auth": "none",
+          "destination": "models/detection/vitpose_h_wholebody_model.onnx",
+          "name": "ViTPose whole-body ONNX model",
+          "sha256": "f21466cd6c93d0066782ad5923c14a4e6569133def212dc2895c73596c2e553b",
+          "size_bytes": 420252,
+          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_model.onnx"
+        },
+        {
+          "auth": "none",
+          "destination": "models/detection/vitpose_h_wholebody_data.bin",
+          "name": "ViTPose whole-body external weights",
+          "sha256": "f6a9e7cb3a87ed65a098b096029e70150408acfafc3d695019a66b289d7719e1",
+          "size_bytes": 2548958740,
+          "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin"
+        },
+        {
+          "auth": "none",
+          "destination": "models/sams/sam2.1_hiera_base_plus.safetensors",
+          "name": "SAM 2.1 Hiera Base Plus",
+          "sha256": "eb4b5f725c8b68205aa05bbe6b27efc628b18b4b9c7b9bb8218991b86b9a4932",
+          "size_bytes": 323474320,
+          "url": "https://huggingface.co/fofr/comfyui/resolve/main/sam2/sam2.1_hiera_base_plus.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/frame_interpolation/rife49.pth",
+          "name": "RIFE 4.9 interpolation model",
+          "sha256": "e55fd00f3cc184e3c65961f4bb827a9da022e78eed36b055242c0ac30000d533",
+          "size_bytes": 21345274,
+          "url": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation/releases/download/models/rife49.pth"
+        }
+      ],
+      "id": "motion-control-god-edition",
       "model_links": [
         {
-          "source": "models/frame_interpolation/rife49.pth",
-          "destination": "custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/rife49.pth"
+          "destination": "custom_nodes/ComfyUI-Frame-Interpolation/ckpts/rife/rife49.pth",
+          "source": "models/frame_interpolation/rife49.pth"
         }
       ],
-      "custom_nodes": [
-        {
-          "name": "ComfyUI-WanVideoWrapper",
-          "repo": "https://github.com/kijai/ComfyUI-WanVideoWrapper.git",
-          "ref": "b2c8cf969fcf60a38884ea2c29af177ae1f28b29",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-WanAnimatePreprocess",
-          "repo": "https://github.com/kijai/ComfyUI-WanAnimatePreprocess.git",
-          "ref": "0e0b6a2a555625acf4d4aefb780e27d06937132f",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-KJNodes",
-          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
-          "ref": "c9869eade9920a1b949de07c4a197156006bcceb",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-segment-anything-2",
-          "repo": "https://github.com/kijai/ComfyUI-segment-anything-2.git",
-          "ref": "c59676b008a76237002926f684d0ca3a9b29ac54",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-VideoHelperSuite",
-          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
-          "ref": "0edce8ef7ce173ac97a3ed3d6f4636029d1a4530",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Frame-Interpolation",
-          "repo": "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git",
-          "ref": "a969c01dbccd9e5510641be04eb51fe93f6bfc3d",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Custom-Scripts",
-          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
-          "ref": "aac13aa7ce35b07d43633c3bbe654a38c00d74f5",
-          "install_requirements": true
-        },
-        {
-          "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
-          "ref": "eadc24ecc8bfc3c80fcc50724c0ebe74489f255b",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Easy-Use",
-          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
-          "ref": "a1b402b4a9c0ddd35c0ac1197579f8f7b121ff3e",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyMath",
-          "repo": "https://github.com/evanspearman/ComfyMath.git",
-          "ref": "c01177221c31b8e5fbc062778fc8254aeb541638",
-          "install_requirements": true
-        },
-        {
-          "name": "comfyui-propost",
-          "repo": "https://github.com/digitaljohn/comfyui-propost.git",
-          "ref": "df6a6d122498f57ad7195d58e07701a501c9dcb6",
-          "install_requirements": true
-        },
-        {
-          "name": "CRT-Nodes",
-          "repo": "https://github.com/PGCRT/CRT-Nodes.git",
-          "ref": "7e277170b525a07fc4a9b6fd1e87ee00ec9628e4",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI_Swwan",
-          "repo": "https://github.com/aining2022/ComfyUI_Swwan.git",
-          "ref": "7cfbebaf850d1ce8eaa3bda63e10597d8864261d",
-          "install_requirements": true
-        }
-      ]
+      "title": "Motion Control GOD Edition",
+      "update_comfyui": true
     },
     {
+      "accent": "#5271ff",
+      "badge": "READY",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-KJNodes",
+          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-VideoHelperSuite",
+          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+        }
+      ],
+      "description": "Update ComfyUI and install the complete MiniMax H3 video and audio model stack.",
+      "estimated_size": "Approx. 63.4 GB",
+      "files": [
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "name": "MiniMax H3 FL2VA INT8",
+          "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
+          "size_bytes": 20970379616,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "name": "MiniMax H3 REF2VA INT8",
+          "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+          "size_bytes": 20970379616,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "name": "MiniMax H3 Qwen3-VL 32B text encoder",
+          "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+          "size_bytes": 15687142551,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/minimax_h3_video_vae_fp16.safetensors",
+          "name": "MiniMax H3 video VAE FP16",
+          "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
+          "size_bytes": 5207808496,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/minimax_h3_audio_vae_fp32.safetensors",
+          "name": "MiniMax H3 audio VAE FP32",
+          "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+          "size_bytes": 605254808,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+        }
+      ],
       "id": "minimax-h3",
       "title": "MiniMax H3",
-      "description": "Update ComfyUI and install the complete MiniMax H3 video and audio model stack.",
-      "badge": "READY",
-      "accent": "#5271ff",
-      "estimated_size": "Approx. 63.4 GB",
-      "update_comfyui": true,
-      "files": [
-        {
-          "name": "MiniMax H3 FL2VA INT8",
-          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-          "destination": "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-          "size_bytes": 20970379616,
-          "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
-          "auth": "none"
-        },
-        {
-          "name": "MiniMax H3 REF2VA INT8",
-          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-          "destination": "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-          "size_bytes": 20970379616,
-          "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
-          "auth": "none"
-        },
-        {
-          "name": "MiniMax H3 Qwen3-VL 32B text encoder",
-          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-          "destination": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-          "size_bytes": 15687142551,
-          "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
-          "auth": "none"
-        },
-        {
-          "name": "MiniMax H3 video VAE FP16",
-          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
-          "destination": "models/vae/minimax_h3_video_vae_fp16.safetensors",
-          "size_bytes": 5207808496,
-          "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
-          "auth": "none"
-        },
-        {
-          "name": "MiniMax H3 audio VAE FP32",
-          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
-          "destination": "models/vae/minimax_h3_audio_vae_fp32.safetensors",
-          "size_bytes": 605254808,
-          "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
-          "auth": "none"
-        }
-      ],
-      "custom_nodes": [
-        {
-          "name": "ComfyUI-KJNodes",
-          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git",
-          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
-          "install_requirements": true
-        },
-        {
-          "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
-          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-VideoHelperSuite",
-          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
-          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
-          "install_requirements": true
-        }
-      ]
+      "update_comfyui": true
     },
     {
-      "id": "krqw2-1",
-      "title": "KRQW2.1",
-      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders, Qwen Image 2.1 VAEs and five supporting custom-node packs.",
-      "badge": "READY",
       "accent": "#5271ff",
+      "badge": "READY",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "218d6347dac5b6499ae56dbfeb25cbb6dd203ac5",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Custom-Scripts",
+          "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-SeedVR2_VideoUpscaler",
+          "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
+          "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Easy-Use",
+          "ref": "b0b47ca1372117fce575d9e744655344ebff6bef",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-10SOR-Regeneration-Gate",
+          "ref": "7d891c3c1abb64cd51913816ecf3eeca343574bc",
+          "repo": "https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git"
+        }
+      ],
+      "description": "Install the seven-model KRQW2.1 stack with REDGPT, Krea 2 Turbo, Qwen3-VL text encoders, Qwen Image 2.1 VAEs and five supporting custom-node packs.",
       "estimated_size": "Approx. 44.3 GB",
-      "update_comfyui": true,
       "files": [
         {
-          "name": "REDGPT FP8",
-          "url": "https://civitai.com/api/download/models/3370753?fileId=3258921",
+          "auth": "civitai",
           "destination": "models/diffusion_models/redgptK2T2W6A8REDQW21_redqw21UNLOCKEDV2_fp8.safetensors",
-          "size_bytes": 7116801326,
+          "name": "REDGPT FP8",
           "sha256": "0efb5aeb2b372025042e320c2e35c66ec6681ef54ad5de88a652ab19cc63ad92",
-          "auth": "civitai"
+          "size_bytes": 7116801326,
+          "url": "https://civitai.com/api/download/models/3370753?fileId=3258921"
         },
         {
-          "name": "Krea 2 Turbo FP8",
-          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+          "auth": "none",
           "destination": "models/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
-          "size_bytes": 13141730784,
+          "name": "Krea 2 Turbo FP8",
           "sha256": "eb4dd8c612cfd10f64f25b057e6e6bbcb5737c94a7372177e456dbf7579502f1",
-          "auth": "none"
+          "size_bytes": 13141730784,
+          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors"
         },
         {
-          "name": "KRQW2.1 Civitai LoRA",
-          "url": "https://civitai.com/api/download/models/3357315?fileId=3244894",
+          "auth": "civitai",
           "destination": "models/loras/civitai_lora_3357315_3244894.safetensors",
-          "size_bytes": 79744352,
+          "name": "KRQW2.1 Civitai LoRA",
           "sha256": "83aba822ad8ee10a1e836828f5088259d93bce7b5f3419b46dbc0258c2be46a9",
-          "auth": "civitai"
+          "size_bytes": 79744352,
+          "url": "https://civitai.com/api/download/models/3357315?fileId=3244894"
         },
         {
-          "name": "Qwen3-VL 8B BF16 text encoder",
-          "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_bf16.safetensors",
+          "auth": "none",
           "destination": "models/text_encoders/qwen3vl_8b_bf16.safetensors",
-          "size_bytes": 17534334616,
+          "name": "Qwen3-VL 8B BF16 text encoder",
           "sha256": "68bdc82bc1b66851162ae656225e7e2068166b603db19bd5d5a3b90eb12669a9",
-          "auth": "none"
+          "size_bytes": 17534334616,
+          "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_bf16.safetensors"
         },
         {
-          "name": "Qwen3-VL 4B FP8 text encoder",
-          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "auth": "none",
           "destination": "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
-          "size_bytes": 5242467968,
+          "name": "Qwen3-VL 4B FP8 text encoder",
           "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
-          "auth": "none"
+          "size_bytes": 5242467968,
+          "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
         },
         {
-          "name": "Qwen Image 2.1 VAE BF16",
-          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+          "auth": "none",
           "destination": "models/vae/qwen_image_2.1_vae_bf16.safetensors",
-          "size_bytes": 675509688,
+          "name": "Qwen Image 2.1 VAE BF16",
           "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
-          "auth": "none"
+          "size_bytes": 675509688,
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors"
         },
         {
-          "name": "Krea 2 Real VAE",
-          "url": "https://huggingface.co/LS110824/vae/resolve/main/krea2RealVae_v10.safetensors",
+          "auth": "none",
           "destination": "models/vae/krea2RealVae_v10.safetensors",
-          "size_bytes": 507591212,
+          "name": "Krea 2 Real VAE",
           "sha256": "0dbbe0baeca04c2b98d2f3809c6f595608939809c88b695ba971368f17c874b8",
+          "size_bytes": 507591212,
+          "url": "https://huggingface.co/LS110824/vae/resolve/main/krea2RealVae_v10.safetensors"
+        },
+        {
+          "name": "bfs_head_v1.1_qwen_2.1.safetensors",
+          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors",
+          "destination": "models/loras/bfs_head_v1.1_qwen_2.1.safetensors",
           "auth": "none"
         }
       ],
-      "custom_nodes": [
-        {
-          "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
-          "ref": "218d6347dac5b6499ae56dbfeb25cbb6dd203ac5",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Custom-Scripts",
-          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git",
-          "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-SeedVR2_VideoUpscaler",
-          "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git",
-          "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-Easy-Use",
-          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git",
-          "ref": "b0b47ca1372117fce575d9e744655344ebff6bef",
-          "install_requirements": true
-        },
-        {
-          "name": "ComfyUI-10SOR-Regeneration-Gate",
-          "repo": "https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git",
-          "ref": "7d891c3c1abb64cd51913816ecf3eeca343574bc",
-          "install_requirements": true
-        }
-      ]
+      "id": "krqw2-1",
+      "title": "KRQW2.1",
+      "update_comfyui": true
     }
   ]
 }
