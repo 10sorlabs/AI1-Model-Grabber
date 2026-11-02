@@ -1,5 +1,5 @@
 {
-  "version": 19,
+  "version": 20,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -653,12 +653,18 @@
           "url": "https://huggingface.co/LS110824/vae/resolve/main/krea2RealVae_v10.safetensors"
         },
         {
-          "name": "bfs_head_v1.1_qwen_2.1.safetensors",
-          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors",
-          "destination": "models/loras/bfs_head_v1.1_qwen_2.1.safetensors",
           "auth": "none",
+          "destination": "models/loras/bfs_head_v1.1_qwen_2.1.safetensors",
+          "name": "bfs_head_v1.1_qwen_2.1.safetensors",
           "sha256": "d1d748d5601077f3b6d05766f6823510e901970d916afa404a97e85dc92fa88e",
-          "size_bytes": 260096144
+          "size_bytes": 260096144,
+          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors"
+        },
+        {
+          "name": "lenovo_qwen21.safetensors",
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/lenovo_qwen21.safetensors",
+          "destination": "models/loras/lenovo_qwen21.safetensors",
+          "auth": "none"
         }
       ],
       "id": "krqw2-1",
