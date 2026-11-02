@@ -1,5 +1,5 @@
 {
-  "version": 20,
+  "version": 21,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -664,7 +664,9 @@
           "name": "lenovo_qwen21.safetensors",
           "url": "https://huggingface.co/gravedigga/loras/resolve/main/lenovo_qwen21.safetensors",
           "destination": "models/loras/lenovo_qwen21.safetensors",
-          "auth": "none"
+          "auth": "none",
+          "sha256": "7f1e95c3ec1e9c7cea197f7b6f80f601af8e6b479f6ead78ab16df542f447c0e",
+          "size_bytes": 79743896
         }
       ],
       "id": "krqw2-1",
