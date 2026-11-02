@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 19,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -656,7 +656,9 @@
           "name": "bfs_head_v1.1_qwen_2.1.safetensors",
           "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors",
           "destination": "models/loras/bfs_head_v1.1_qwen_2.1.safetensors",
-          "auth": "none"
+          "auth": "none",
+          "sha256": "d1d748d5601077f3b6d05766f6823510e901970d916afa404a97e85dc92fa88e",
+          "size_bytes": 260096144
         }
       ],
       "id": "krqw2-1",
