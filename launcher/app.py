@@ -4164,7 +4164,15 @@ print(sageattention.__file__, triton.__version__)
         # carry --end-of-options, but checkout must not - it reads the flag as the
         # argument to --detach and fails outright on the git the pods run.
         ref = str(node.get("ref", "")).strip()
-        if not re.fullmatch(r"[0-9a-f]{40}", ref, re.IGNORECASE):
+        # Only the first-party Regeneration Gate may follow moving main. All
+        # third-party custom nodes remain pinned for reproducibility.
+        live_10sor_main = (
+            name == "ComfyUI-10SOR-Regeneration-Gate"
+            and normalized_git_remote(repo)
+            == normalized_git_remote("https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git")
+            and ref == "main"
+        )
+        if not live_10sor_main and not re.fullmatch(r"[0-9a-f]{40}", ref, re.IGNORECASE):
             raise RuntimeError(
                 f"Custom node {name} must pin a 40-character commit sha."
             )
@@ -4223,52 +4231,65 @@ print(sageattention.__file__, triton.__version__)
                     f"The existing {name} folder is not the expected Git repository."
                 )
 
-        returncode, _ = await self._run_process(
-            "git",
-            "-C",
-            destination,
-            "cat-file",
-            "-e",
-            "--end-of-options",
-            f"{ref}^{{commit}}",
-            timeout=60,
-        )
-        if returncode:
-            step("fetching the pinned version")
+        if live_10sor_main:
+            # Freshly fetch main on EVERY install, including existing checkouts.
+            # Fast-forward only: preserve local edits and never force-reset.
+            for label, command in (
+                ("fetching latest 10SOR main", ("git", "-C", destination, "fetch", "--no-tags", "origin", "main")),
+                ("switching to 10SOR main", ("git", "-C", destination, "switch", "main")),
+                ("fast-forwarding 10SOR main", ("git", "-C", destination, "merge", "--ff-only", "origin/main")),
+            ):
+                step(label)
+                returncode, output = await self._run_process(*command, timeout=600)
+                if returncode:
+                    raise RuntimeError(f"Could not update {name}: {output[-500:]}")
+        else:
+            returncode, _ = await self._run_process(
+                "git",
+                "-C",
+                destination,
+                "cat-file",
+                "-e",
+                "--end-of-options",
+                f"{ref}^{{commit}}",
+                timeout=60,
+            )
+            if returncode:
+                step("fetching the pinned version")
+                returncode, output = await self._run_process(
+                    "git",
+                    "-C",
+                    destination,
+                    "fetch",
+                    "--no-tags",
+                    "--filter=blob:none",
+                    "--end-of-options",
+                    "origin",
+                    ref,
+                    timeout=600,
+                )
+                if returncode:
+                    raise RuntimeError(
+                        f"Could not fetch the pinned version for {name}: {output[-500:]}"
+                    )
+
+            step("selecting the pinned version")
             returncode, output = await self._run_process(
                 "git",
                 "-C",
                 destination,
-                "fetch",
-                "--no-tags",
-                "--filter=blob:none",
-                "--end-of-options",
-                "origin",
+                "checkout",
+                "--detach",
+                # No --end-of-options here: git checkout reads it as the argument to
+                # --detach ("does not take a path argument"). The 40-hex validation above
+                # is what keeps this ref from ever being parsed as an option.
                 ref,
                 timeout=600,
             )
             if returncode:
                 raise RuntimeError(
-                    f"Could not fetch the pinned version for {name}: {output[-500:]}"
+                    f"Could not select the pinned version for {name}: {output[-500:]}"
                 )
-
-        step("selecting the pinned version")
-        returncode, output = await self._run_process(
-            "git",
-            "-C",
-            destination,
-            "checkout",
-            "--detach",
-            # No --end-of-options here: git checkout reads it as the argument to
-            # --detach ("does not take a path argument"). The 40-hex validation above
-            # is what keeps this ref from ever being parsed as an option.
-            ref,
-            timeout=600,
-        )
-        if returncode:
-            raise RuntimeError(
-                f"Could not select the pinned version for {name}: {output[-500:]}"
-            )
 
         self.state.restart_required = True
         requirements = destination / "requirements.txt"
