@@ -28,8 +28,10 @@ workflow JSON files are deliberately not included.
 
 Each preset continues after an individual model or custom-node failure. Failed
 items are shown as warnings at the end so the remaining downloads and node
-installs are not discarded. When an existing custom-node checkout does not yet
-contain its pinned commit, the launcher fetches that commit before checkout.
+installs are not discarded. Most custom nodes remain pinned to a known commit for reproducibility. The first-party
+`ComfyUI-10SOR-Regeneration-Gate` is the exception: the KRQW2.1 preset follows
+`main`, fetching the newest commit on each install and using fast-forward-only
+updates without a forced reset. Other custom-node pins are unchanged.
 After every preset installation, ComfyUI is automatically restarted through
 ComfyUI Manager and the launcher waits until port 8188 is ready again.
 
@@ -135,7 +137,7 @@ and custom nodes:
     {
       "name": "Example-ComfyUI-Node",
       "repo": "https://github.com/example/Example-ComfyUI-Node.git",
-      "ref": "pin-a-tag-or-commit-here",
+      "ref": "pin-a-40-character-commit-sha-here",
       "install_requirements": true
     }
   ]
@@ -221,3 +223,12 @@ docker push 10sorllabs/comfyui-workflow-launcher:1.0
 
 Alternatively, run the included GitHub Actions workflow after adding repository
 secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+## First-party live update policy
+
+The `KRQW2.1` custom-node entry `ComfyUI-10SOR-Regeneration-Gate` uses `"ref": "main"`.
+The installer recognizes **only** this exact repository and name as eligible for a
+moving branch. On each preset install it fetches `origin main`, switches to local
+`main` and merges `origin/main` with `--ff-only`. Local changes or divergence
+cause a clear error instead of being overwritten. Restart ComfyUI after updating
+to load the latest backend and frontend extension.
