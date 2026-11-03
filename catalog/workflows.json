@@ -589,7 +589,7 @@
         {
           "install_requirements": true,
           "name": "ComfyUI-10SOR-Regeneration-Gate",
-          "ref": "7d891c3c1abb64cd51913816ecf3eeca343574bc",
+          "ref": "main",
           "repo": "https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git"
         }
       ],
