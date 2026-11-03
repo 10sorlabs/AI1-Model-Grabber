@@ -15,13 +15,14 @@ RunPod.
 - A button that routes from the launcher to the matching RunPod ComfyUI proxy.
 - Optional launcher updates from GitHub at container startup.
 
-The current catalog contains five production installers:
+The current catalog contains six production installers:
 
 - Krea 2 Extended (approximately 25.4 GB)
 - WAN Motion Control (approximately 45.4 GB)
 - Motion Control GOD Edition
 - MiniMax H3 (approximately 63.4 GB)
 - KRQW2.1 (approximately 44.3 GB)
+- DarkDesire H3 (approximately 83.2 GB)
 
 The catalog installs only models, supporting files and custom nodes. Product
 workflow JSON files are deliberately not included.

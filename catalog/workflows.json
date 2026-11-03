@@ -1,5 +1,5 @@
 {
-  "version": 21,
+  "version": 22,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -671,6 +671,85 @@
       ],
       "id": "krqw2-1",
       "title": "KRQW2.1",
+      "update_comfyui": true
+    },
+    {
+      "accent": "#d946ef",
+      "badge": "NEW",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-KJNodes",
+          "ref": "8692bc8ef8beaaeee80fd52ba80477dc9e61547b",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-VideoHelperSuite",
+          "ref": "4ee72c065db22c9d96c2427954dc69e7b908444b",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+        }
+      ],
+      "description": "Install the DarkDesire Krea 2, H3 ErosMax and BSS Desire model stack with the MiniMax H3 INT8 video VAE and two upscalers.",
+      "estimated_size": "Approx. 83.2 GB",
+      "files": [
+        {
+          "auth": "civitai",
+          "destination": "models/diffusion_models/DasiwaKrea2TurboRaw_darkdesireV3TurboUC_3251200.safetensors",
+          "name": "DarkDesire V3 Turbo UC",
+          "sha256": "5afd8842e6cf7866912d8916b05d5c41566e0c0b0d0b897cb1f243d99a11c4d6",
+          "size_bytes": 13784925704,
+          "url": "https://civitai.com/api/download/models/3362930?fileId=3251200"
+        },
+        {
+          "auth": "civitai",
+          "destination": "models/diffusion_models/h3ErosMax_beta6_3282668.safetensors",
+          "name": "H3 ErosMax beta6",
+          "sha256": "ca88b49b06a90e2a0aa9b8d4e1bafc9c09cdba61f6bf57a900c197f4c3f4992d",
+          "size_bytes": 40222950568,
+          "url": "https://civitai.com/api/download/models/3393047?fileId=3282668"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+          "name": "MiniMax H3 video VAE INT8 ConvRot",
+          "sha256": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+          "size_bytes": 2811065184,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors"
+        },
+        {
+          "auth": "civitai",
+          "destination": "models/checkpoints/BSSDesirexKrea2_x3BF16INT8NVFP4_3307067.safetensors",
+          "name": "BSS Desire x Krea 2 X3",
+          "sha256": "7ba351dfc796506c5e9d737084db7cae31654276c287d9a0af79c45a5a1597bc",
+          "size_bytes": 25640224096,
+          "url": "https://civitai.com/api/download/models/3411639?fileId=3307067"
+        },
+        {
+          "auth": "none",
+          "destination": "models/upscale_models/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors",
+          "name": "MiniMax H3 latent upscaler 3D Conv v1 BF16",
+          "sha256": "4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6",
+          "size_bytes": 690592992,
+          "url": "https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler/resolve/main/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/upscale_models/2x-AnimeSharpV4_RCAN.safetensors",
+          "name": "2x AnimeSharpV4 RCAN",
+          "sha256": "6470bb91d6622d6acdff81132c1a8615b961b919ce2b9a01ce993378500cfbe1",
+          "size_bytes": 31053198,
+          "url": "https://huggingface.co/Kim2091/2x-AnimeSharpV4/resolve/main/2x-AnimeSharpV4_RCAN.safetensors"
+        }
+      ],
+      "id": "darkdesire-h3",
+      "title": "DarkDesire H3",
       "update_comfyui": true
     }
   ]

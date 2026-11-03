@@ -211,8 +211,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 5
-        assert sum(not item.get("disabled", False) for item in workflows) == 5
+        assert len(workflows) == 6
+        assert sum(not item.get("disabled", False) for item in workflows) == 6
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -228,6 +228,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "motion-control-god-edition",
         "minimax-h3",
         "krqw2-1",
+        "darkdesire-h3",
     ]
     assert {
         "image-generation",
@@ -256,8 +257,8 @@ def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
     assert installer["title"] == "KRQW2.1"
     assert installer["estimated_size"] == "Approx. 44.3 GB"
     assert installer["update_comfyui"] is True
-    assert len(installer["files"]) == 7
-    assert sum(item["size_bytes"] for item in installer["files"]) == 44_298_179_946
+    assert len(installer["files"]) == 9
+    assert sum(item["size_bytes"] for item in installer["files"]) == 44_638_019_986
     assert [item["name"] for item in installer["custom_nodes"]] == [
         "rgthree-comfy",
         "ComfyUI-Custom-Scripts",
@@ -266,6 +267,36 @@ def test_krqw2_1_installer_matches_the_batch_manifest() -> None:
         "ComfyUI-10SOR-Regeneration-Gate",
     ]
     assert {item["auth"] for item in installer["files"]} == {"none", "civitai"}
+
+
+def test_darkdesire_h3_installer_contains_only_new_models() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "darkdesire-h3"
+    )
+
+    assert installer["estimated_size"] == "Approx. 83.2 GB"
+    assert installer["update_comfyui"] is True
+    assert sum(item["size_bytes"] for item in installer["files"]) == 83_180_811_742
+    assert [item["destination"] for item in installer["files"]] == [
+        "models/diffusion_models/DasiwaKrea2TurboRaw_darkdesireV3TurboUC_3251200.safetensors",
+        "models/diffusion_models/h3ErosMax_beta6_3282668.safetensors",
+        "models/vae/minimax_h3_video_vae_int8_convrot.safetensors",
+        "models/checkpoints/BSSDesirexKrea2_x3BF16INT8NVFP4_3307067.safetensors",
+        "models/upscale_models/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors",
+        "models/upscale_models/2x-AnimeSharpV4_RCAN.safetensors",
+    ]
+    assert {
+        "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+        "models/vae/minimax_h3_audio_vae_fp32.safetensors",
+        "models/vae/qwen_image_vae.safetensors",
+    }.isdisjoint(item["destination"] for item in installer["files"])
+    assert [item["name"] for item in installer["custom_nodes"]] == [
+        "ComfyUI-KJNodes",
+        "rgthree-comfy",
+        "ComfyUI-VideoHelperSuite",
+    ]
 
 
 def test_krea_2_extended_installer_matches_the_multiflow_registry() -> None:
@@ -1237,7 +1268,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 5
+    assert len(launcher_app.load_catalog()["workflows"]) == 6
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1250,19 +1281,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 5
+    assert len(launcher_app.load_catalog()["workflows"]) == 6
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 5
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 5
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1352,7 +1383,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 5
+        assert len(catalog["workflows"]) == 6
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1387,7 +1418,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 5
+        assert len(launcher_app.load_catalog()["workflows"]) == 6
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
@@ -5350,8 +5381,17 @@ def test_the_audit_walks_each_pinned_pack_once() -> None:
     ]
     assert len(packs) < len(listed)
     assert len(packs) == len({(node["repo"], node["ref"]) for node in listed})
-    # Every pack is pinned to a sha, which is what makes this audit reproducible.
-    assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for _name, _repo, ref in packs)
+    # Every third-party pack is pinned to a sha. The reviewed first-party
+    # Regeneration Gate is the sole moving-ref exception supported by the launcher.
+    moving_ref = (
+        "ComfyUI-10SOR-Regeneration-Gate",
+        "https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git",
+        "main",
+    )
+    assert all(
+        re.fullmatch(r"[0-9a-f]{40}", ref) or (name, repo, ref) == moving_ref
+        for name, repo, ref in packs
+    )
 
 
 def test_aria2_report_lines_drops_paths_without_mangling_aria2s_arithmetic() -> None:
