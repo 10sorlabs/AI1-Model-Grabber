@@ -1,5 +1,5 @@
 {
-  "version": 24,
+  "version": 25,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -861,6 +861,14 @@
           "sha256": "f0f60fa072089997f817402098c2fd90777cb2660dd79cf5df42fc1e3e08e527",
           "size_bytes": 9791388,
           "url": "https://huggingface.co/Kijai/MiniMax-H3-TAE/resolve/main/vae_approx/taeh3.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/10Eros_Max_h3_8stepTURBO_beta7.safetensors",
+          "name": "10Eros_Max_h3_8stepTURBO_beta7.safetensors",
+          "sha256": "b1361691a953ff7623e5dc628a76e338d592da12e3c9d5652cecb7eeaaa4aa94",
+          "size_bytes": 40222934448,
+          "url": "https://civitai.red/api/download/models/3429412?fileId=3330999&token=fdbb802d4a22b22939cdc61b422acc69&utm_source=chatgpt.com"
         }
       ],
       "id": "minimax-h3-v2",
