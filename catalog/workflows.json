@@ -1,5 +1,5 @@
 {
-  "version": 25,
+  "version": 26,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -785,6 +785,12 @@
           "name": "ComfyUI-Easy-Use",
           "ref": "b0b47ca1372117fce575d9e744655344ebff6bef",
           "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
+        },
+        {
+          "name": "ComfyUI-Lokken-VideoTools",
+          "repo": "https://github.com/LordLocksley/ComfyUI-Lokken-VideoTools.git",
+          "ref": "0f2eeb3c15e9bf04dff57aa915c8016ef92317ca",
+          "install_requirements": true
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
@@ -869,6 +875,22 @@
           "sha256": "b1361691a953ff7623e5dc628a76e338d592da12e3c9d5652cecb7eeaaa4aa94",
           "size_bytes": 40222934448,
           "url": "https://civitai.red/api/download/models/3429412?fileId=3330999&token=fdbb802d4a22b22939cdc61b422acc69&utm_source=chatgpt.com"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/MysticXXX_MMH3-V5.safetensors",
+          "name": "MysticXXX_MMH3-V5.safetensors",
+          "sha256": "4168917daeb6e570a004bc6994f73d091b9f3e887f7e946bd00c0f2f7573e5f3",
+          "size_bytes": 298932824,
+          "url": "https://civitai.red/api/download/models/3416478?fileId=3309543&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/MysticXXX_MMH3-V5-ref2va.safetensors",
+          "name": "MysticXXX_MMH3-V5-ref2va.safetensors",
+          "sha256": "f57c76e761f7a5113e541ad58e84c648a5fe4d3cfbc277d0c44ae9763da29afe",
+          "size_bytes": 138339432,
+          "url": "https://civitai.red/api/download/models/3416478?fileId=3311427&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "minimax-h3-v2",
