@@ -6112,7 +6112,7 @@ def test_minimax_ngx_fallback_extracts_only_the_matching_library(
                 return (
                     0,
                     "libnvidia-ngx.so.1 (libc6,x86-64) => "
-                    f"{install_dir}/libnvidia-ngx.so.595.91.07\n",
+                    f"{install_dir}/libnvidia-ngx.so.1\n",
                 )
             return 0, ""
         if normalized[:2] == ("apt-get", "download"):
@@ -6131,6 +6131,12 @@ def test_minimax_ngx_fallback_extracts_only_the_matching_library(
             shutil.copy2(normalized[-2], normalized[-1])
             return 0, ""
         if normalized[0] == "ln":
+            link = Path(normalized[-1])
+            source = Path(normalized[-2])
+            if not source.is_absolute():
+                source = link.parent / source
+            link.unlink(missing_ok=True)
+            os.link(source, link)
             return 0, ""
         if normalized == ("ldconfig",):
             cache_refreshed = True
@@ -6172,7 +6178,7 @@ def test_minimax_ngx_fallback_refreshes_apt_once_after_download_failure(
         normalized = tuple(str(part) for part in command)
         if normalized == ("ldconfig", "-p"):
             output = (
-                "libnvidia-ngx.so.1 => /usr/local/lib/libnvidia-ngx.so.595.91.07"
+                f"libnvidia-ngx.so.1 => {install_dir}/libnvidia-ngx.so.1"
                 if cache_refreshed
                 else ""
             )
@@ -6195,6 +6201,12 @@ def test_minimax_ngx_fallback_refreshes_apt_once_after_download_failure(
             shutil.copy2(normalized[-2], normalized[-1])
             return 0, ""
         if normalized[0] == "ln":
+            link = Path(normalized[-1])
+            source = Path(normalized[-2])
+            if not source.is_absolute():
+                source = link.parent / source
+            link.unlink(missing_ok=True)
+            os.link(source, link)
             return 0, ""
         if normalized == ("ldconfig",):
             cache_refreshed = True
@@ -6208,7 +6220,16 @@ def test_minimax_ngx_fallback_refreshes_apt_once_after_download_failure(
     assert updates == 1
 
 
-def test_minimax_ngx_fallback_skips_download_when_linker_is_ready(monkeypatch) -> None:
+def test_minimax_ngx_fallback_skips_download_when_linker_is_ready(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    install_dir = tmp_path / "usr-local-lib"
+    install_dir.mkdir()
+    versioned = install_dir / "libnvidia-ngx.so.595.91.07"
+    versioned.write_bytes(b"ngx")
+    os.link(versioned, install_dir / "libnvidia-ngx.so.1")
+    monkeypatch.setattr(launcher_app, "MINIMAX_H3_NGX_INSTALL_DIR", install_dir)
     controller = launcher_app.JobController()
     commands = []
 
@@ -6217,7 +6238,7 @@ def test_minimax_ngx_fallback_skips_download_when_linker_is_ready(monkeypatch) -
         return (
             0,
             "libnvidia-ngx.so.1 (libc6,x86-64) => "
-            "/usr/local/lib/libnvidia-ngx.so.595.91.07\n",
+            f"{install_dir}/libnvidia-ngx.so.1\n",
         )
 
     monkeypatch.setattr(controller, "_run_process", fake_process)
