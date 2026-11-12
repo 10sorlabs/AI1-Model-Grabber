@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import configparser
 import errno
 import hashlib
 import json
@@ -54,6 +55,7 @@ SAGEATTENTION_VERSION = "2.2.0"
 SAGEATTENTION_ARCHITECTURES = "9.0;10.0;12.0"
 
 MINIMAX_H3_CU130_PROFILE = "minimax-h3-cu130"
+MINIMAX_H3_MANAGER_SECURITY_LEVEL = "weak"
 MINIMAX_H3_CU130_PACKAGES = (
     "torch==2.10.0+cu130",
     "torchvision==0.25.0+cu130",
@@ -588,6 +590,16 @@ def _validate_catalog(data: dict[str, Any]) -> None:
             MINIMAX_H3_CU130_PROFILE,
         }:
             raise RuntimeError(f"Unsupported runtime profile: {profile}")
+
+        manager_security = workflow.get("manager_security_level")
+        if manager_security not in {None, "", MINIMAX_H3_MANAGER_SECURITY_LEVEL}:
+            raise RuntimeError(
+                f"Unsupported ComfyUI-Manager security level: {manager_security}"
+            )
+        if manager_security and workflow_id != "minimax-h3-v2":
+            raise RuntimeError(
+                "ComfyUI-Manager security changes are restricted to MiniMax H3 V2."
+            )
 
         links = workflow.get("model_links", [])
         if not isinstance(links, list):
@@ -1410,6 +1422,50 @@ def human_bytes(count: float) -> str:
             return f"{count:.2f} {unit}" if unit == "GB" else f"{count:.0f} {unit}"
         count /= 1024
     return f"{count:.2f} GB"
+
+
+def set_manager_security_level(config_path: Path, level: str) -> str:
+    """Set Manager's security level without discarding its other configuration.
+
+    Current ComfyUI-Manager stores system-user settings in user/__manager/config.ini.
+    A new config is written there before the first post-update restart so Manager does
+    not migrate the legacy config and raise a deliberately weak level back to normal.
+    The replace is atomic: a stopped pod can leave either the old complete file or the
+    new complete file, never a truncated one.
+    """
+    if level != MINIMAX_H3_MANAGER_SECURITY_LEVEL:
+        raise RuntimeError(f"Unsupported ComfyUI-Manager security level: {level}")
+
+    parser = configparser.RawConfigParser()
+    if config_path.exists():
+        try:
+            with config_path.open("r", encoding="utf-8") as handle:
+                parser.read_file(handle)
+        except (OSError, UnicodeError, configparser.Error) as exc:
+            raise RuntimeError(
+                "ComfyUI-Manager config.ini could not be read safely."
+            ) from exc
+    if not parser.has_section("default"):
+        parser.add_section("default")
+    previous = parser.get("default", "security_level", fallback="unset").strip()
+    parser.set("default", "security_level", level)
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix="config.ini.",
+        suffix=".tmp",
+        dir=config_path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            parser.write(handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, config_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return previous or "unset"
 
 
 # A gigabyte, and the floor for judging a pod. Anything smaller never escapes the few
@@ -2942,25 +2998,61 @@ class JobController:
                     stage="updating", message=finished_message, bytes_per_second=0
                 )
 
+    async def _configure_manager_security(self, level: str) -> None:
+        if level != MINIMAX_H3_MANAGER_SECURITY_LEVEL:
+            raise RuntimeError(f"Unsupported ComfyUI-Manager security level: {level}")
+        self.update(
+            stage="updating",
+            message="Configuring ComfyUI-Manager security for MiniMax H3 V2…",
+            bytes_per_second=0,
+        )
+        config_path = COMFYUI_DIR / "user" / "__manager" / "config.ini"
+        previous = await asyncio.to_thread(
+            set_manager_security_level,
+            config_path,
+            level,
+        )
+        print(
+            "10sorLabs launcher: ComfyUI-Manager security level changed "
+            f"from {previous!r} to {level!r}.",
+            flush=True,
+        )
+        self.update(message="ComfyUI-Manager security configured; continuing setup…")
+
     async def _install_workflow(self, workflow: dict[str, Any]) -> None:
         await self._wait_for_comfyui()
         files = workflow.get("files", [])
         nodes = workflow.get("custom_nodes", [])
         model_links = workflow.get("model_links", [])
         runtime_profile = str(workflow.get("runtime_profile", "")).strip()
-        # Older remote catalogs may already expose this tile without its new profile.
-        # The tile id is first-party and fixed, so keep the migration attached to it even
-        # while a pod is between the launcher update and the next catalog refresh.
-        if workflow.get("id") == "minimax-h3-v2" and not runtime_profile:
-            runtime_profile = MINIMAX_H3_CU130_PROFILE
+        manager_security_level = str(
+            workflow.get("manager_security_level", "")
+        ).strip()
         should_update_comfyui = bool(workflow.get("update_comfyui"))
-        if not files and not nodes and not should_update_comfyui and not runtime_profile:
+        # Older remote catalogs may already expose this tile without its new profile.
+        # The tile id is first-party and fixed, so keep every required bootstrap step
+        # attached while a pod is between the launcher update and a catalog refresh.
+        if workflow.get("id") == "minimax-h3-v2":
+            runtime_profile = runtime_profile or MINIMAX_H3_CU130_PROFILE
+            manager_security_level = (
+                manager_security_level or MINIMAX_H3_MANAGER_SECURITY_LEVEL
+            )
+            should_update_comfyui = True
+        if (
+            not files
+            and not nodes
+            and not should_update_comfyui
+            and not runtime_profile
+            and not manager_security_level
+        ):
             raise RuntimeError(
-                "This workflow does not define any files, custom nodes, runtime profile or updates."
+                "This workflow does not define files, custom nodes, runtime setup or updates."
             )
 
         if should_update_comfyui:
             await self._update_comfyui()
+        if manager_security_level:
+            await self._configure_manager_security(manager_security_level)
 
         known_total = sum(
             max(0, int(file_spec.get("size_bytes", 0))) for file_spec in files

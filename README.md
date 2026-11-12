@@ -167,6 +167,14 @@ fails, the launcher records the missing or mismatched components and performs on
 clean repair attempt; it never retries indefinitely. The full result is included
 in the Debug install report under `RUNTIME PROFILE`.
 
+Before that runtime setup, MiniMax H3 V2 updates ComfyUI to the current official
+`master` and writes `security_level = weak` to the `[default]` section of
+`user/__manager/config.ini`. The existing Manager configuration is preserved and
+the file is replaced atomically. This order matters: current ComfyUI provides the
+system-user API that makes `__manager` the authoritative location, and creating
+the new config before the final restart prevents legacy migration from raising the
+requested level back to `normal`.
+
 `model_links` can expose a catalog model at the private path expected by a custom
 node without downloading or permanently storing it twice. Both `source` and
 `destination` are relative to the ComfyUI directory; the launcher prefers a hard

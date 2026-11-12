@@ -914,9 +914,10 @@
         }
       ],
       "id": "minimax-h3-v2",
+      "manager_security_level": "weak",
       "runtime_profile": "minimax-h3-cu130",
       "title": "MiniMax H3 V2",
-      "update_comfyui": false
+      "update_comfyui": true
     }
   ]
 }
