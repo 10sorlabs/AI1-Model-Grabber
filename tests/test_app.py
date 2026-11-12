@@ -1,4 +1,5 @@
 import asyncio
+import configparser
 import contextlib
 import errno
 import hashlib
@@ -453,6 +454,8 @@ def test_minimax_h3_v2_installs_the_cu130_runtime_profile() -> None:
     )
 
     assert installer["runtime_profile"] == launcher_app.MINIMAX_H3_CU130_PROFILE
+    assert installer["manager_security_level"] == "weak"
+    assert installer["update_comfyui"] is True
     assert "CUDA 13.0" in installer["description"]
 
 
@@ -460,18 +463,77 @@ def test_minimax_h3_v2_keeps_its_runtime_on_an_older_remote_catalog(
     monkeypatch,
 ) -> None:
     controller = launcher_app.JobController()
-    installed = []
+    events = []
 
     monkeypatch.setattr(controller, "_wait_for_comfyui", lambda: asyncio.sleep(0))
 
-    async def fake_runtime(profile: str) -> None:
-        installed.append(profile)
+    async def fake_update() -> None:
+        events.append("update-comfyui")
 
+    async def fake_security(level: str) -> None:
+        events.append(f"manager-security:{level}")
+
+    async def fake_runtime(profile: str) -> None:
+        events.append(f"runtime:{profile}")
+
+    monkeypatch.setattr(controller, "_update_comfyui", fake_update)
+    monkeypatch.setattr(controller, "_configure_manager_security", fake_security)
     monkeypatch.setattr(controller, "_install_runtime_profile", fake_runtime)
 
     asyncio.run(controller._install_workflow({"id": "minimax-h3-v2"}))
 
-    assert installed == [launcher_app.MINIMAX_H3_CU130_PROFILE]
+    assert events == [
+        "update-comfyui",
+        "manager-security:weak",
+        f"runtime:{launcher_app.MINIMAX_H3_CU130_PROFILE}",
+    ]
+
+
+def test_manager_security_config_is_created_in_the_new_system_user_location(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    config = comfy_dir / "user" / "__manager" / "config.ini"
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    controller = launcher_app.JobController()
+
+    asyncio.run(controller._configure_manager_security("weak"))
+
+    parser = configparser.RawConfigParser()
+    parser.read(config, encoding="utf-8")
+    assert parser.get("default", "security_level") == "weak"
+
+
+def test_manager_security_change_preserves_every_other_setting(tmp_path) -> None:
+    config = tmp_path / "ComfyUI" / "user" / "__manager" / "config.ini"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "[default]\n"
+        "security_level = normal\n"
+        "network_mode = public\n"
+        "use_uv = false\n\n"
+        "[custom]\n"
+        "percent_value = 100%\n",
+        encoding="utf-8",
+    )
+
+    previous = launcher_app.set_manager_security_level(config, "weak")
+
+    parser = configparser.RawConfigParser()
+    parser.read(config, encoding="utf-8")
+    assert previous == "normal"
+    assert parser.get("default", "security_level") == "weak"
+    assert parser.get("default", "network_mode") == "public"
+    assert parser.getboolean("default", "use_uv") is False
+    assert parser.get("custom", "percent_value") == "100%"
+
+
+def test_manager_security_rejects_unreviewed_values(tmp_path) -> None:
+    config = tmp_path / "config.ini"
+    with pytest.raises(RuntimeError, match="Unsupported ComfyUI-Manager"):
+        launcher_app.set_manager_security_level(config, "normal-")
+    assert not config.exists()
 
 
 def test_local_windows_installers_match_the_catalog() -> None:
@@ -1388,6 +1450,17 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
                 "version": 3,
                 "workflows": [
                     {"id": "unsafe-profile", "runtime_profile": "run-shell"}
+                ],
+            }
+        ).encode("utf-8"),
+        json.dumps(
+            {
+                "version": 3,
+                "workflows": [
+                    {
+                        "id": "unsafe-manager-security",
+                        "manager_security_level": "weak",
+                    }
                 ],
             }
         ).encode("utf-8"),
