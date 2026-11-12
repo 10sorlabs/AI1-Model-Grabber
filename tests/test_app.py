@@ -6068,6 +6068,9 @@ def cu130_runtime_harness(tmp_path, monkeypatch, *, pip_results: list[tuple[int,
     pip_runs: list[tuple[tuple[str, ...], dict]] = []
     probes = 0
 
+    async def fake_ngx(driver_version: str) -> str:
+        return driver_version
+
     async def fake_process(*command, **bounds) -> tuple[int, str]:
         nonlocal probes
         normalized = tuple(str(part) for part in command)
@@ -6083,7 +6086,145 @@ def cu130_runtime_harness(tmp_path, monkeypatch, *, pip_results: list[tuple[int,
         raise AssertionError(normalized)
 
     monkeypatch.setattr(controller, "_run_process", fake_process)
+    monkeypatch.setattr(controller, "_ensure_minimax_ngx_library", fake_ngx)
     return controller, store, pip_runs, lambda: probes
+
+
+def test_minimax_ngx_fallback_extracts_only_the_matching_library(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    install_dir = tmp_path / "usr-local-lib"
+    temporary_root = tmp_path / "tmp"
+    temporary_root.mkdir()
+    monkeypatch.setattr(launcher_app, "MINIMAX_H3_NGX_INSTALL_DIR", install_dir)
+    monkeypatch.setattr(launcher_app, "MINIMAX_H3_NGX_TEMP_ROOT", temporary_root)
+    controller = launcher_app.JobController()
+    commands: list[tuple[tuple[str, ...], dict]] = []
+    cache_refreshed = False
+
+    async def fake_process(*command, **bounds) -> tuple[int, str]:
+        nonlocal cache_refreshed
+        normalized = tuple(str(part) for part in command)
+        commands.append((normalized, bounds))
+        if normalized == ("ldconfig", "-p"):
+            if cache_refreshed:
+                return (
+                    0,
+                    "libnvidia-ngx.so.1 (libc6,x86-64) => "
+                    f"{install_dir}/libnvidia-ngx.so.595.91.07\n",
+                )
+            return 0, ""
+        if normalized[:2] == ("apt-get", "download"):
+            package_dir = Path(bounds["cwd"])
+            (package_dir / "libnvidia-gl-595-server_test_amd64.deb").write_bytes(b"deb")
+            return 0, "downloaded"
+        if normalized[:2] == ("dpkg-deb", "-x"):
+            source = (
+                Path(normalized[3])
+                / "usr/lib/x86_64-linux-gnu/libnvidia-ngx.so.595.91.07"
+            )
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"ngx-only")
+            return 0, ""
+        if normalized[0] == "install":
+            shutil.copy2(normalized[-2], normalized[-1])
+            return 0, ""
+        if normalized[0] == "ln":
+            return 0, ""
+        if normalized == ("ldconfig",):
+            cache_refreshed = True
+            return 0, ""
+        raise AssertionError(normalized)
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    version = asyncio.run(controller._ensure_minimax_ngx_library("595.91.07"))
+
+    assert version == "595.91.07"
+    assert (install_dir / "libnvidia-ngx.so.595.91.07").read_bytes() == b"ngx-only"
+    download = next(command for command, _ in commands if command[:2] == ("apt-get", "download"))
+    assert download == (
+        "apt-get",
+        "download",
+        "libnvidia-gl-595-server=595.91.07-0ubuntu0.24.04.1",
+    )
+    assert not any(command[:2] == ("apt-get", "install") for command, _ in commands)
+    assert controller.state.restart_required is True
+
+
+def test_minimax_ngx_fallback_refreshes_apt_once_after_download_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    install_dir = tmp_path / "usr-local-lib"
+    temporary_root = tmp_path / "tmp"
+    temporary_root.mkdir()
+    monkeypatch.setattr(launcher_app, "MINIMAX_H3_NGX_INSTALL_DIR", install_dir)
+    monkeypatch.setattr(launcher_app, "MINIMAX_H3_NGX_TEMP_ROOT", temporary_root)
+    controller = launcher_app.JobController()
+    downloads = 0
+    updates = 0
+    cache_refreshed = False
+
+    async def fake_process(*command, **bounds) -> tuple[int, str]:
+        nonlocal downloads, updates, cache_refreshed
+        normalized = tuple(str(part) for part in command)
+        if normalized == ("ldconfig", "-p"):
+            output = (
+                "libnvidia-ngx.so.1 => /usr/local/lib/libnvidia-ngx.so.595.91.07"
+                if cache_refreshed
+                else ""
+            )
+            return 0, output
+        if normalized[:2] == ("apt-get", "download"):
+            downloads += 1
+            if downloads == 1:
+                return 100, "package lists are stale"
+            (Path(bounds["cwd"]) / "libnvidia-gl-595-server_test.deb").write_bytes(b"deb")
+            return 0, ""
+        if normalized == ("apt-get", "update"):
+            updates += 1
+            return 0, ""
+        if normalized[:2] == ("dpkg-deb", "-x"):
+            source = Path(normalized[3]) / "libnvidia-ngx.so.595.91.07"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b"ngx")
+            return 0, ""
+        if normalized[0] == "install":
+            shutil.copy2(normalized[-2], normalized[-1])
+            return 0, ""
+        if normalized[0] == "ln":
+            return 0, ""
+        if normalized == ("ldconfig",):
+            cache_refreshed = True
+            return 0, ""
+        raise AssertionError(normalized)
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    assert asyncio.run(controller._ensure_minimax_ngx_library("595.91.07")) == "595.91.07"
+    assert downloads == 2
+    assert updates == 1
+
+
+def test_minimax_ngx_fallback_skips_download_when_linker_is_ready(monkeypatch) -> None:
+    controller = launcher_app.JobController()
+    commands = []
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        commands.append(tuple(str(part) for part in command))
+        return (
+            0,
+            "libnvidia-ngx.so.1 (libc6,x86-64) => "
+            "/usr/local/lib/libnvidia-ngx.so.595.91.07\n",
+        )
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    assert asyncio.run(controller._ensure_minimax_ngx_library("595.91.07")) == "595.91.07"
+    assert commands == [("ldconfig", "-p")]
+    assert controller.state.restart_required is False
 
 
 def test_cu130_profile_unsets_runpod_constraints_and_verifies_the_stack(

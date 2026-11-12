@@ -175,6 +175,14 @@ system-user API that makes `__manager` the authoritative location, and creating
 the new config before the final restart prevents legacy migration from raising the
 requested level back to `normal`.
 
+The same MiniMax runtime check also verifies that the NVIDIA NGX userspace library
+needed by some super-resolution nodes is visible through `ldconfig`. If RunPod has
+injected the GPU driver without NGX, the launcher downloads the matching Ubuntu
+`libnvidia-gl-<driver>-server` package, extracts it in `/tmp`, and copies only the
+versioned `libnvidia-ngx.so` file into `/usr/local/lib`. It then creates the `.so.1`
+and unversioned links and refreshes the linker cache. The full NVIDIA package is
+never installed, so this fallback does not replace the pod's injected driver stack.
+
 `model_links` can expose a catalog model at the private path expected by a custom
 node without downloading or permanently storing it twice. Both `source` and
 `destination` are relative to the ComfyUI directory; the launcher prefers a hard
