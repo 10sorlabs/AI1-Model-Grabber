@@ -1,5 +1,5 @@
 {
-  "version": 27,
+  "version": 28,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -791,6 +791,18 @@
           "name": "ComfyUI-Lokken-VideoTools",
           "ref": "0f2eeb3c15e9bf04dff57aa915c8016ef92317ca",
           "repo": "https://github.com/LordLocksley/ComfyUI-Lokken-VideoTools.git"
+        },
+        {
+          "name": "rgthree-comfy",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git",
+          "ref": "bc48c6aaeca87bedbc14245d89f9bc6be37a630e",
+          "install_requirements": true
+        },
+        {
+          "name": "ComfyUI_Nvidia_VFX_Nodes",
+          "repo": "https://github.com/Comfy-Org/ComfyUI_Nvidia_VFX_Nodes.git",
+          "ref": "38d790ded00650681fa3645362efe28c8560cf40",
+          "install_requirements": true
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
