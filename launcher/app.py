@@ -61,6 +61,9 @@ MINIMAX_H3_CU130_PACKAGES = (
     "torchvision==0.25.0+cu130",
     "torchaudio==2.10.0+cu130",
 )
+MINIMAX_H3_NGX_UBUNTU_REVISION = "0ubuntu0.24.04.1"
+MINIMAX_H3_NGX_INSTALL_DIR = Path("/usr/local/lib")
+MINIMAX_H3_NGX_TEMP_ROOT = Path("/tmp")
 PYTORCH_CU130_INDEX = "https://download.pytorch.org/whl/cu130"
 CUDA_13_MINIMUM_DRIVER_MAJOR = 580
 
@@ -3999,6 +4002,7 @@ class JobController:
         *command: str | Path,
         timeout: float | None = None,
         env: dict[str, str] | None = None,
+        cwd: str | Path | None = None,
     ) -> tuple[int, str]:
         """Run a command to completion; return (exit code, stdout+stderr).
 
@@ -4035,6 +4039,7 @@ class JobController:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
+            cwd=str(cwd) if cwd is not None else None,
         )
         executable = Path(str(command[0])).name
         started = time.monotonic()
@@ -4239,6 +4244,144 @@ raise SystemExit(1 if issues else 0)
             )
         return first
 
+    async def _probe_minimax_ngx_library(self) -> str | None:
+        """Return the versioned NGX library visible to the dynamic linker."""
+        returncode, output = await self._run_process("ldconfig", "-p", timeout=60)
+        if returncode:
+            return None
+        matches = re.findall(r"libnvidia-ngx\.so\.(\d+\.\d+\.\d+)", output)
+        return matches[0] if matches else None
+
+    async def _refresh_minimax_ngx_links(self, library_name: str) -> None:
+        install_dir = MINIMAX_H3_NGX_INSTALL_DIR
+        await self._run_profile_command(
+            "NVIDIA NGX soname link",
+            "ln",
+            "-sfn",
+            library_name,
+            install_dir / "libnvidia-ngx.so.1",
+            timeout=60,
+        )
+        await self._run_profile_command(
+            "NVIDIA NGX linker-name link",
+            "ln",
+            "-sfn",
+            "libnvidia-ngx.so.1",
+            install_dir / "libnvidia-ngx.so",
+            timeout=60,
+        )
+        await self._run_profile_command(
+            "dynamic linker cache refresh",
+            "ldconfig",
+            timeout=60,
+        )
+
+    async def _ensure_minimax_ngx_library(self, driver_version: str) -> str:
+        """Repair the NGX userspace library without installing a driver package.
+
+        RunPod injects the host driver into the container, but some pods omit NGX.
+        Installing an Ubuntu NVIDIA package normally would risk replacing unrelated
+        driver libraries. Instead, download the package matching nvidia-smi, extract it
+        in /tmp, and copy only its versioned libnvidia-ngx shared object.
+        """
+        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", driver_version)
+        if not match:
+            raise RuntimeError("NVIDIA NGX repair needs a complete driver version.")
+
+        available = await self._probe_minimax_ngx_library()
+        if available == driver_version:
+            return available
+
+        driver_major = match.group(1)
+        package = f"libnvidia-gl-{driver_major}-server"
+        package_version = f"{driver_version}-{MINIMAX_H3_NGX_UBUNTU_REVISION}"
+        library_name = f"libnvidia-ngx.so.{driver_version}"
+        install_dir = MINIMAX_H3_NGX_INSTALL_DIR
+        installed_library = install_dir / library_name
+
+        self.update(message="Checking the NVIDIA NGX super-resolution library…")
+        if not installed_library.is_file():
+            try:
+                temporary_root = tempfile.TemporaryDirectory(
+                    prefix="10sorlabs-ngx-",
+                    dir=MINIMAX_H3_NGX_TEMP_ROOT,
+                )
+            except OSError as exc:
+                raise RuntimeError("Could not create the temporary NGX workspace.") from exc
+
+            with temporary_root as temporary_name:
+                temporary = Path(temporary_name)
+                package_spec = f"{package}={package_version}"
+                returncode, output = await self._run_process(
+                    "apt-get",
+                    "download",
+                    package_spec,
+                    timeout=1800,
+                    cwd=temporary,
+                )
+                if returncode:
+                    self.update(message="Refreshing Ubuntu packages for NVIDIA NGX…")
+                    await self._run_profile_command(
+                        "Ubuntu package index refresh for NVIDIA NGX",
+                        "apt-get",
+                        "update",
+                        timeout=900,
+                    )
+                    returncode, output = await self._run_process(
+                        "apt-get",
+                        "download",
+                        package_spec,
+                        timeout=1800,
+                        cwd=temporary,
+                    )
+                if returncode:
+                    tail = output[-1000:].strip()
+                    raise RuntimeError(
+                        f"NVIDIA NGX package download failed for {package_spec}: {tail}"
+                    )
+
+                packages = sorted(temporary.glob(f"{package}_*.deb"))
+                if len(packages) != 1:
+                    raise RuntimeError("NVIDIA NGX download produced no unique package.")
+                extract_dir = temporary / "extracted"
+                await self._run_profile_command(
+                    "NVIDIA NGX package extraction",
+                    "dpkg-deb",
+                    "-x",
+                    packages[0],
+                    extract_dir,
+                    timeout=300,
+                )
+                candidates = [
+                    candidate
+                    for candidate in extract_dir.rglob(library_name)
+                    if candidate.is_file()
+                ]
+                if len(candidates) != 1:
+                    raise RuntimeError(
+                        f"NVIDIA package did not contain exactly one {library_name}."
+                    )
+
+                install_dir.mkdir(parents=True, exist_ok=True)
+                await self._run_profile_command(
+                    "NVIDIA NGX library installation",
+                    "install",
+                    "-m",
+                    "0644",
+                    candidates[0],
+                    installed_library,
+                    timeout=120,
+                )
+
+        await self._refresh_minimax_ngx_links(library_name)
+        available = await self._probe_minimax_ngx_library()
+        if available != driver_version:
+            raise RuntimeError(
+                "NVIDIA NGX library is still unavailable after linker-cache repair."
+            )
+        self.state.restart_required = True
+        return available
+
     @staticmethod
     def _minimax_cu130_failure_reason(output: str, returncode: int) -> str:
         text = output.lower()
@@ -4304,9 +4447,22 @@ raise SystemExit(1 if issues else 0)
                 error=str(exc),
             )
             raise
+        try:
+            ngx_version = await self._ensure_minimax_ngx_library(driver_version)
+        except RuntimeError as exc:
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="NGX library repair failed",
+                versions={"nvidia-driver": driver_version, "nvidia-ngx": "missing"},
+                issues=[str(exc)],
+                total_seconds=time.monotonic() - started,
+                error=str(exc),
+            )
+            raise
         probe_code, probe = await self._probe_minimax_cu130_runtime(python)
         versions = dict(probe.get("versions") or {})
         versions["nvidia-driver"] = driver_version
+        versions["nvidia-ngx"] = ngx_version
         sources = dict(probe.get("sources") or {})
         issues = [str(issue) for issue in (probe.get("issues") or [])]
         diagnostics.record_runtime_profile(
@@ -4402,6 +4558,7 @@ raise SystemExit(1 if issues else 0)
             probe_code, probe = await self._probe_minimax_cu130_runtime(python)
             versions = dict(probe.get("versions") or {})
             versions["nvidia-driver"] = driver_version
+            versions["nvidia-ngx"] = ngx_version
             sources = dict(probe.get("sources") or {})
             issues = [str(issue) for issue in (probe.get("issues") or [])]
             if returncode and last_reason not in issues:
