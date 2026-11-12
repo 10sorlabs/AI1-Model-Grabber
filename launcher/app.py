@@ -4244,12 +4244,49 @@ raise SystemExit(1 if issues else 0)
             )
         return first
 
-    async def _probe_minimax_ngx_library(self) -> str | None:
-        """Return the versioned NGX library visible to the dynamic linker."""
+    async def _probe_minimax_ngx_library(
+        self,
+        expected_version: str | None = None,
+    ) -> str | None:
+        """Return the NGX version behind the dynamic linker's cached SONAME.
+
+        ``ldconfig -p`` commonly prints ``.../libnvidia-ngx.so.1`` rather than the
+        fully versioned target. Inspect both the cache text and the file behind that
+        entry; requiring the version to appear literally in the text rejects a healthy
+        repair even though the loader can already find it.
+        """
         returncode, output = await self._run_process("ldconfig", "-p", timeout=60)
         if returncode:
             return None
         matches = re.findall(r"libnvidia-ngx\.so\.(\d+\.\d+\.\d+)", output)
+        if expected_version and expected_version in matches:
+            return expected_version
+
+        destinations = re.findall(
+            r"^\s*libnvidia-ngx\.so(?:\.1)?\s+.*?=>\s+(\S+)\s*$",
+            output,
+            flags=re.MULTILINE,
+        )
+        for destination_text in destinations:
+            destination = Path(destination_text)
+            try:
+                resolved = destination.resolve(strict=True)
+            except OSError:
+                continue
+            match = re.search(r"libnvidia-ngx\.so\.(\d+\.\d+\.\d+)$", resolved.name)
+            if match:
+                return match.group(1)
+
+            if expected_version:
+                expected = (
+                    MINIMAX_H3_NGX_INSTALL_DIR
+                    / f"libnvidia-ngx.so.{expected_version}"
+                )
+                try:
+                    if expected.is_file() and os.path.samefile(destination, expected):
+                        return expected_version
+                except OSError:
+                    continue
         return matches[0] if matches else None
 
     async def _refresh_minimax_ngx_links(self, library_name: str) -> None:
@@ -4288,7 +4325,7 @@ raise SystemExit(1 if issues else 0)
         if not match:
             raise RuntimeError("NVIDIA NGX repair needs a complete driver version.")
 
-        available = await self._probe_minimax_ngx_library()
+        available = await self._probe_minimax_ngx_library(driver_version)
         if available == driver_version:
             return available
 
@@ -4374,7 +4411,7 @@ raise SystemExit(1 if issues else 0)
                 )
 
         await self._refresh_minimax_ngx_links(library_name)
-        available = await self._probe_minimax_ngx_library()
+        available = await self._probe_minimax_ngx_library(driver_version)
         if available != driver_version:
             raise RuntimeError(
                 "NVIDIA NGX library is still unavailable after linker-cache repair."
