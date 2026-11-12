@@ -211,8 +211,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 6
-        assert sum(not item.get("disabled", False) for item in workflows) == 6
+        assert len(workflows) == 7
+        assert sum(not item.get("disabled", False) for item in workflows) == 7
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -229,6 +229,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "minimax-h3",
         "krqw2-1",
         "darkdesire-h3",
+        "minimax-h3-v2",
     ]
     assert {
         "image-generation",
@@ -443,6 +444,34 @@ def test_minimax_h3_installer_matches_the_runpod_manifest() -> None:
         "ComfyUI-VideoHelperSuite",
     ]
     assert all("/resolve/main/" in item["url"] for item in installer["files"])
+
+
+def test_minimax_h3_v2_installs_the_cu130_runtime_profile() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "minimax-h3-v2"
+    )
+
+    assert installer["runtime_profile"] == launcher_app.MINIMAX_H3_CU130_PROFILE
+    assert "CUDA 13.0" in installer["description"]
+
+
+def test_minimax_h3_v2_keeps_its_runtime_on_an_older_remote_catalog(
+    monkeypatch,
+) -> None:
+    controller = launcher_app.JobController()
+    installed = []
+
+    monkeypatch.setattr(controller, "_wait_for_comfyui", lambda: asyncio.sleep(0))
+
+    async def fake_runtime(profile: str) -> None:
+        installed.append(profile)
+
+    monkeypatch.setattr(controller, "_install_runtime_profile", fake_runtime)
+
+    asyncio.run(controller._install_workflow({"id": "minimax-h3-v2"}))
+
+    assert installed == [launcher_app.MINIMAX_H3_CU130_PROFILE]
 
 
 def test_local_windows_installers_match_the_catalog() -> None:
@@ -1268,7 +1297,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 6
+    assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1281,19 +1310,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 6
+    assert len(launcher_app.load_catalog()["workflows"]) == 7
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1383,7 +1412,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 6
+        assert len(catalog["workflows"]) == 7
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1418,7 +1447,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 6
+        assert len(launcher_app.load_catalog()["workflows"]) == 7
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
@@ -5127,11 +5156,40 @@ def test_the_diagnostics_endpoint_answers_with_every_documented_key(
         "staging_available",
         "in_flight",
         "comfyui_update",
+        "runtime_profile",
         "files",
         "nodes",
     }
     assert isinstance(body["files"], list)
     assert isinstance(body["nodes"], list)
+
+
+def test_runtime_diagnostics_are_redacted_and_rendered() -> None:
+    store = launcher_app.Diagnostics()
+    store.record_runtime_profile(
+        profile=launcher_app.MINIMAX_H3_CU130_PROFILE,
+        phase="verification failed",
+        attempt=2,
+        versions={"torch": "2.10.0+cu128", "cuda-runtime": "12.8"},
+        sources={"torch": "outside-environment"},
+        issues=[
+            "loaded from /usr/local/lib/python3.12/dist-packages at "
+            "https://download.pytorch.org/whl/cu130"
+        ],
+        error="CUDA runtime mismatch in /workspace/runpod-slim/ComfyUI",
+    )
+
+    exported = store.export()["runtime_profile"]
+    serialized = json.dumps(exported)
+    assert "https://" not in serialized
+    assert "/usr/local" not in serialized
+    assert "/workspace" not in serialized
+
+    report = launcher_app.render_install_report(store.export())
+    assert "RUNTIME PROFILE" in report
+    assert "minimax-h3-cu130" in report
+    assert "attempt 2" in report
+    assert "torch 2.10.0+cu128" in report
 
 
 def test_an_in_flight_transfer_exposes_its_samples_before_it_finishes() -> None:
@@ -5907,6 +5965,169 @@ def test_runtime_profiles_are_an_allowlist() -> None:
     controller = launcher_app.JobController()
     with pytest.raises(RuntimeError, match="Unsupported runtime profile"):
         asyncio.run(controller._install_runtime_profile("run-something-from-the-catalog"))
+
+
+def cu130_probe_payload(*, ready: bool) -> str:
+    versions = {
+        "torch": "2.10.0+cu130" if ready else "2.10.0+cu128",
+        "torchvision": "0.25.0+cu130" if ready else "0.25.0+cu128",
+        "torchaudio": "2.10.0+cu130" if ready else "2.10.0+cu128",
+        "cuda-runtime": "13.0" if ready else "12.8",
+    }
+    sources = {name: "environment" for name in ("torch", "torchvision", "torchaudio")}
+    issues = [] if ready else ["PyTorch CUDA runtime is 12.8; expected 13.0"]
+    return "10SOR_CU130_DIAGNOSTIC=" + json.dumps(
+        {"versions": versions, "sources": sources, "issues": issues}
+    )
+
+
+def cu130_runtime_harness(tmp_path, monkeypatch, *, pip_results: list[tuple[int, str]]):
+    comfy_dir = tmp_path / "ComfyUI"
+    python = comfy_dir / ".venv-cu128" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(launcher_app.os, "name", "posix")
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    controller = launcher_app.JobController()
+    pip_runs: list[tuple[tuple[str, ...], dict]] = []
+    probes = 0
+
+    async def fake_process(*command, **bounds) -> tuple[int, str]:
+        nonlocal probes
+        normalized = tuple(str(part) for part in command)
+        if normalized[0] == "nvidia-smi":
+            return 0, "595.91.07\n"
+        if "pip" in normalized:
+            pip_runs.append((normalized, bounds))
+            return pip_results[len(pip_runs) - 1]
+        if "-c" in normalized:
+            probes += 1
+            ready = len(pip_runs) == len(pip_results) and pip_results[-1][0] == 0
+            return (0 if ready else 1), cu130_probe_payload(ready=ready)
+        raise AssertionError(normalized)
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+    return controller, store, pip_runs, lambda: probes
+
+
+def test_cu130_profile_unsets_runpod_constraints_and_verifies_the_stack(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PIP_CONSTRAINT", "/opt/comfyui-runtime-constraints.txt")
+    monkeypatch.setenv("PIP_BUILD_CONSTRAINT", "/opt/build-constraints.txt")
+    controller, store, pip_runs, probe_count = cu130_runtime_harness(
+        tmp_path, monkeypatch, pip_results=[(0, "installed")]
+    )
+
+    asyncio.run(controller._install_runtime_profile(launcher_app.MINIMAX_H3_CU130_PROFILE))
+
+    assert probe_count() == 2
+    assert len(pip_runs) == 1
+    argv, bounds = pip_runs[0]
+    assert set(launcher_app.MINIMAX_H3_CU130_PACKAGES).issubset(argv)
+    assert argv[argv.index("--index-url") + 1] == launcher_app.PYTORCH_CU130_INDEX
+    assert bounds["timeout"] == 3600
+    assert "PIP_CONSTRAINT" not in bounds["env"]
+    assert "PIP_BUILD_CONSTRAINT" not in bounds["env"]
+    assert bounds["env"]["PYTHONNOUSERSITE"] == "1"
+    assert "--force-reinstall" not in argv
+    assert controller.state.restart_required is True
+    report = store.export()["runtime_profile"]
+    assert report["phase"] == "verified"
+    assert report["attempt"] == 1
+    assert report["versions"]["cuda-runtime"] == "13.0"
+
+
+def test_cu130_profile_diagnoses_then_uses_one_clean_repair_attempt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    controller, store, pip_runs, probe_count = cu130_runtime_harness(
+        tmp_path,
+        monkeypatch,
+        pip_results=[
+            (1, "ResolutionImpossible because of a constraint"),
+            (0, "installed"),
+        ],
+    )
+
+    asyncio.run(controller._install_runtime_profile(launcher_app.MINIMAX_H3_CU130_PROFILE))
+
+    assert probe_count() == 3
+    assert len(pip_runs) == 2
+    assert "--force-reinstall" not in pip_runs[0][0]
+    assert "--ignore-installed" not in pip_runs[0][0]
+    assert "--force-reinstall" in pip_runs[1][0]
+    assert "--ignore-installed" in pip_runs[1][0]
+    report = store.export()["runtime_profile"]
+    assert report["phase"] == "verified"
+    assert report["attempt"] == 2
+    assert report["issues"] == []
+
+
+def test_cu130_profile_stops_after_two_failed_attempts_with_diagnostics(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    controller, store, pip_runs, probe_count = cu130_runtime_harness(
+        tmp_path,
+        monkeypatch,
+        pip_results=[
+            (1, "temporary failure"),
+            (1, "temporary failure"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete after two attempts"):
+        asyncio.run(
+            controller._install_runtime_profile(launcher_app.MINIMAX_H3_CU130_PROFILE)
+        )
+
+    assert len(pip_runs) == 2
+    assert probe_count() == 3
+    report = store.export()["runtime_profile"]
+    assert report["phase"] == "verification failed"
+    assert report["attempt"] == 2
+    assert report["error"]
+    assert report["issues"]
+
+
+def test_cu130_profile_rejects_an_old_driver_before_pip(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    comfy_dir = tmp_path / "ComfyUI"
+    python = comfy_dir / ".venv-cu128" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", comfy_dir / ".venv-cu128")
+    monkeypatch.setattr(launcher_app.os, "name", "posix")
+    store = launcher_app.Diagnostics()
+    monkeypatch.setattr(launcher_app, "diagnostics", store)
+    controller = launcher_app.JobController()
+    commands = []
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        commands.append(tuple(str(part) for part in command))
+        return 0, "575.57.08\n"
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+
+    with pytest.raises(RuntimeError, match="driver 580 or newer"):
+        asyncio.run(
+            controller._install_runtime_profile(launcher_app.MINIMAX_H3_CU130_PROFILE)
+        )
+
+    assert len(commands) == 1
+    assert "nvidia-smi" in commands[0]
+    report = store.export()["runtime_profile"]
+    assert report["phase"] == "driver preflight failed"
+    assert report["error"]
 
 
 def node_clone_harness(tmp_path, monkeypatch, failure, on_word="clone"):

@@ -805,7 +805,7 @@
           "install_requirements": true
         }
       ],
-      "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
+      "description": "Install the selected ComfyUI models, custom nodes and the verified PyTorch CUDA 13.0 runtime for this workflow.",
       "estimated_size": "Custom setup",
       "files": [
         {
@@ -914,6 +914,7 @@
         }
       ],
       "id": "minimax-h3-v2",
+      "runtime_profile": "minimax-h3-cu130",
       "title": "MiniMax H3 V2",
       "update_comfyui": false
     }

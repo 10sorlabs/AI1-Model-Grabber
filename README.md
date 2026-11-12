@@ -15,7 +15,7 @@ RunPod.
 - A button that routes from the launcher to the matching RunPod ComfyUI proxy.
 - Optional launcher updates from GitHub at container startup.
 
-The current catalog contains six production installers:
+The current catalog contains seven production installers:
 
 - Krea 2 Extended (approximately 25.4 GB)
 - WAN Motion Control (approximately 45.4 GB)
@@ -23,6 +23,7 @@ The current catalog contains six production installers:
 - MiniMax H3 (approximately 63.4 GB)
 - KRQW2.1 (approximately 44.3 GB)
 - DarkDesire H3 (approximately 83.2 GB)
+- MiniMax H3 V2 (custom setup, including the PyTorch CUDA 13.0 runtime)
 
 The catalog installs only models, supporting files and custom nodes. Product
 workflow JSON files are deliberately not included.
@@ -156,6 +157,15 @@ expressed as a model or custom-node requirement. The
 compute capabilities 9.0, 10.0 and 12.0, then verifies SageAttention, Triton and
 the CUDA ONNX provider before completing the install. Arbitrary commands from a
 remote catalog are never executed.
+
+The MiniMax H3 V2 tile uses the `minimax-h3-cu130` profile. It checks for an
+NVIDIA 580-or-newer driver, installs the matching PyTorch 2.10.0, TorchVision
+0.25.0 and TorchAudio 2.10.0 CUDA 13.0 wheels into ComfyUI's Python environment,
+and verifies their versions, import locations and GPU access. RunPod's cu128 pip
+constraints are removed only for these reviewed child processes. If verification
+fails, the launcher records the missing or mismatched components and performs one
+clean repair attempt; it never retries indefinitely. The full result is included
+in the Debug install report under `RUNTIME PROFILE`.
 
 `model_links` can expose a catalog model at the private path expected by a custom
 node without downloading or permanently storing it twice. Both `source` and

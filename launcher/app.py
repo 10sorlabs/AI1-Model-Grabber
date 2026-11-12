@@ -53,6 +53,15 @@ SAGEATTENTION_PROFILE = "sageattention-cu128-hopper-blackwell"
 SAGEATTENTION_VERSION = "2.2.0"
 SAGEATTENTION_ARCHITECTURES = "9.0;10.0;12.0"
 
+MINIMAX_H3_CU130_PROFILE = "minimax-h3-cu130"
+MINIMAX_H3_CU130_PACKAGES = (
+    "torch==2.10.0+cu130",
+    "torchvision==0.25.0+cu130",
+    "torchaudio==2.10.0+cu130",
+)
+PYTORCH_CU130_INDEX = "https://download.pytorch.org/whl/cu130"
+CUDA_13_MINIMUM_DRIVER_MAJOR = 580
+
 # Resolved once; a file may only use the parallel downloader when this is present.
 ARIA2C_PATH = shutil.which("aria2c")
 # Cleared for the rest of the process the first time an aria2c build refuses
@@ -572,7 +581,12 @@ def _validate_catalog(data: dict[str, Any]) -> None:
         seen.add(workflow_id)
 
         profile = workflow.get("runtime_profile")
-        if profile not in {None, "", SAGEATTENTION_PROFILE}:
+        if profile not in {
+            None,
+            "",
+            SAGEATTENTION_PROFILE,
+            MINIMAX_H3_CU130_PROFILE,
+        }:
             raise RuntimeError(f"Unsupported runtime profile: {profile}")
 
         links = workflow.get("model_links", [])
@@ -1037,6 +1051,7 @@ class Diagnostics:
         self.nodes: deque[dict[str, Any]] = deque(maxlen=history)
         # One per install rather than a rolling log, and cleared by JobController.start().
         self.comfyui_update: dict[str, Any] | None = None
+        self.runtime_profile: dict[str, Any] | None = None
         self._in_flight: dict[str, Any] | None = None
         self._sampler: RateSampler | None = None
 
@@ -1232,6 +1247,38 @@ class Diagnostics:
             "phase": redacted_for_export(str(phase)) if phase else None,
         }
 
+    def record_runtime_profile(
+        self,
+        *,
+        profile: str,
+        phase: str,
+        attempt: int = 0,
+        versions: dict[str, str] | None = None,
+        sources: dict[str, str] | None = None,
+        issues: list[str] | None = None,
+        total_seconds: float = 0.0,
+        error: str | None = None,
+        in_flight: bool = False,
+    ) -> None:
+        """Keep the CUDA migration visible without exporting paths or package URLs."""
+        self.runtime_profile = {
+            "profile": profile,
+            "phase": redacted_for_export(str(phase)),
+            "attempt": max(0, int(attempt)),
+            "versions": {
+                str(key): redacted_for_export(str(value))
+                for key, value in (versions or {}).items()
+            },
+            "sources": {
+                str(key): redacted_for_export(str(value))
+                for key, value in (sources or {}).items()
+            },
+            "issues": [redacted_for_export(str(issue)) for issue in (issues or [])],
+            "total_seconds": round(total_seconds, 1),
+            "error": redacted_for_export(str(error)) if error else None,
+            "in_flight": in_flight,
+        }
+
     def export(self) -> dict[str, Any]:
         in_flight = None
         if self._in_flight is not None:
@@ -1250,6 +1297,7 @@ class Diagnostics:
             "staging_available": scratch_dir() is not None,
             "in_flight": in_flight,
             "comfyui_update": self.comfyui_update,
+            "runtime_profile": self.runtime_profile,
             "files": list(self.files),
             "nodes": list(self.nodes),
         }
@@ -1531,6 +1579,14 @@ def _verdict_lines(report: dict[str, Any]) -> list[str]:
     if update.get("error"):
         lines.append(f"The ComfyUI update did not finish: {update['error']}")
 
+    runtime = report.get("runtime_profile") or {}
+    if runtime.get("error"):
+        lines.append(f"The CUDA runtime setup did not finish: {runtime['error']}")
+    elif runtime.get("issues"):
+        lines.append(
+            "The CUDA runtime check found: " + "; ".join(runtime.get("issues", []))
+        )
+
     return lines
 
 
@@ -1657,6 +1713,36 @@ def render_install_report(report: dict[str, Any], tier: str = "unknown") -> str:
                 f"requirements in {update.get('requirements_seconds', 0)}s, "
                 f"total {update.get('total_seconds', 0)}s"
             )
+        out.append("")
+
+    runtime = report.get("runtime_profile")
+    if runtime:
+        out.append("RUNTIME PROFILE")
+        state = "still running" if runtime.get("in_flight") else (
+            "failed" if runtime.get("error") else "ready"
+        )
+        out.append(
+            f"  {runtime.get('profile', 'unknown')}   {state}   "
+            f"phase {runtime.get('phase', 'unknown')}   "
+            f"attempt {runtime.get('attempt', 0)}   "
+            f"{runtime.get('total_seconds', 0)}s"
+        )
+        versions = runtime.get("versions") or {}
+        if versions:
+            out.append(
+                "  versions            "
+                + ", ".join(f"{name} {version}" for name, version in versions.items())
+            )
+        sources = runtime.get("sources") or {}
+        if sources:
+            out.append(
+                "  package sources     "
+                + ", ".join(f"{name} {source}" for name, source in sources.items())
+            )
+        for issue in runtime.get("issues") or []:
+            out.append(f"  missing/mismatch    {issue}")
+        if runtime.get("error"):
+            out.append(f"  error               {runtime['error']}")
         out.append("")
 
     slowest = min(
@@ -2425,6 +2511,7 @@ class JobController:
             # of bug as the byte counter a node install used to inherit from a finished
             # download.
             diagnostics.comfyui_update = None
+            diagnostics.runtime_profile = None
             self.state = JobState(
                 status="running",
                 workflow_id=workflow["id"],
@@ -2861,6 +2948,11 @@ class JobController:
         nodes = workflow.get("custom_nodes", [])
         model_links = workflow.get("model_links", [])
         runtime_profile = str(workflow.get("runtime_profile", "")).strip()
+        # Older remote catalogs may already expose this tile without its new profile.
+        # The tile id is first-party and fixed, so keep the migration attached to it even
+        # while a pod is between the launcher update and the next catalog refresh.
+        if workflow.get("id") == "minimax-h3-v2" and not runtime_profile:
+            runtime_profile = MINIMAX_H3_CU130_PROFILE
         should_update_comfyui = bool(workflow.get("update_comfyui"))
         if not files and not nodes and not should_update_comfyui and not runtime_profile:
             raise RuntimeError(
@@ -3942,6 +4034,329 @@ class JobController:
             if not await asyncio.to_thread(link_or_copy, source, destination):
                 raise RuntimeError(f"Could not place {source.name} for its custom node.")
 
+    async def _probe_minimax_cu130_runtime(
+        self,
+        python: Path,
+    ) -> tuple[int, dict[str, Any]]:
+        """Describe the Torch stack with stable, non-sensitive diagnostic fields."""
+        probe = r'''
+import importlib
+import importlib.metadata
+import json
+import sys
+from pathlib import Path
+
+expected = {
+    "torch": "2.10.0+cu130",
+    "torchvision": "0.25.0+cu130",
+    "torchaudio": "2.10.0+cu130",
+}
+versions = {}
+sources = {}
+issues = []
+modules = {}
+prefix = Path(sys.prefix).resolve()
+
+for name, wanted in expected.items():
+    try:
+        module = importlib.import_module(name)
+        modules[name] = module
+        version = importlib.metadata.version(name)
+        versions[name] = version
+        origin = Path(module.__file__).resolve()
+        sources[name] = "environment" if origin.is_relative_to(prefix) else "outside-environment"
+        if version != wanted:
+            issues.append(f"{name} is {version}; expected {wanted}")
+        if sources[name] != "environment":
+            issues.append(f"{name} loads from outside the ComfyUI environment")
+    except Exception as exc:
+        versions[name] = "missing"
+        sources[name] = "unavailable"
+        issues.append(f"{name} import failed ({type(exc).__name__})")
+
+torch = modules.get("torch")
+torch_cuda = getattr(getattr(torch, "version", None), "cuda", None) if torch else None
+versions["cuda-runtime"] = str(torch_cuda or "missing")
+if torch_cuda != "13.0":
+    issues.append(f"PyTorch CUDA runtime is {torch_cuda or 'missing'}; expected 13.0")
+
+cuda_available = False
+if torch is not None:
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        issues.append(f"CUDA availability check failed ({type(exc).__name__})")
+if not cuda_available:
+    issues.append("PyTorch cannot access a CUDA GPU")
+
+print("10SOR_CU130_DIAGNOSTIC=" + json.dumps({
+    "versions": versions,
+    "sources": sources,
+    "issues": list(dict.fromkeys(issues)),
+}, sort_keys=True))
+raise SystemExit(1 if issues else 0)
+'''.strip()
+        try:
+            returncode, output = await self._run_process(
+                python,
+                "-c",
+                probe,
+                timeout=120,
+            )
+        except InstallCancelled:
+            raise
+        except RuntimeError:
+            return 1, {
+                "versions": {},
+                "sources": {},
+                "issues": ["the CUDA diagnostic process failed or timed out"],
+            }
+        prefix = "10SOR_CU130_DIAGNOSTIC="
+        for line in reversed(output.splitlines()):
+            if not line.startswith(prefix):
+                continue
+            try:
+                payload = json.loads(line[len(prefix) :])
+            except json.JSONDecodeError:
+                break
+            if isinstance(payload, dict):
+                return returncode, payload
+        return returncode or 1, {
+            "versions": {},
+            "sources": {},
+            "issues": ["the CUDA diagnostic did not return a readable result"],
+        }
+
+    async def _minimax_cu130_driver_version(self) -> str:
+        returncode, output = await self._run_process(
+            "nvidia-smi",
+            "--query-gpu=driver_version",
+            "--format=csv,noheader",
+            timeout=60,
+        )
+        if returncode:
+            raise RuntimeError("NVIDIA driver detection failed; nvidia-smi returned an error.")
+        first = next((line.strip() for line in output.splitlines() if line.strip()), "")
+        match = re.match(r"(\d+)(?:\.(\d+))?", first)
+        if not match:
+            raise RuntimeError("NVIDIA driver detection returned no usable version.")
+        if int(match.group(1)) < CUDA_13_MINIMUM_DRIVER_MAJOR:
+            raise RuntimeError(
+                f"CUDA 13.0 requires NVIDIA driver {CUDA_13_MINIMUM_DRIVER_MAJOR} or newer; "
+                f"this pod reports {first}."
+            )
+        return first
+
+    @staticmethod
+    def _minimax_cu130_failure_reason(output: str, returncode: int) -> str:
+        text = output.lower()
+        if "no space left on device" in text:
+            return "not enough container disk space for the CUDA 13.0 packages"
+        if "resolutionimpossible" in text or "constraint" in text:
+            return "pip constraints or dependency resolution blocked the CUDA 13.0 stack"
+        if any(
+            phrase in text
+            for phrase in (
+                "read timed out",
+                "connection reset",
+                "temporary failure",
+                "max retries exceeded",
+                "network is unreachable",
+            )
+        ):
+            return "the PyTorch CUDA package download was interrupted"
+        return f"pip installation exited with status {returncode}"
+
+    async def _install_minimax_cu130_runtime(self) -> None:
+        """Install and repair the exact cu130 stack required by MiniMax H3 V2.
+
+        The RunPod image deliberately exposes system packages inside ComfyUI's venv and
+        pins its base cu128 stack through PIP_CONSTRAINT. That is why this routine both
+        removes the two constraint variables for its child pip and verifies where every
+        imported module came from. Two attempts are enough: the second is a clean
+        reinstall for a partial or shadowed first install, not an unbounded download loop.
+        """
+        started = time.monotonic()
+        if os.name != "posix":
+            error = "The MiniMax H3 CUDA 13.0 profile requires a Linux pod."
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="environment preflight failed",
+                issues=[error],
+                total_seconds=time.monotonic() - started,
+                error=error,
+            )
+            raise RuntimeError(error)
+
+        python = COMFYUI_VENV / "bin" / "python"
+        if not python.exists():
+            error = "The ComfyUI Python environment is missing."
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="environment preflight failed",
+                issues=[error],
+                total_seconds=time.monotonic() - started,
+                error=error,
+            )
+            raise RuntimeError(error)
+
+        self.update(stage="installing", message="Checking CUDA 13.0 compatibility…")
+        try:
+            driver_version = await self._minimax_cu130_driver_version()
+        except RuntimeError as exc:
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="driver preflight failed",
+                issues=[str(exc)],
+                total_seconds=time.monotonic() - started,
+                error=str(exc),
+            )
+            raise
+        probe_code, probe = await self._probe_minimax_cu130_runtime(python)
+        versions = dict(probe.get("versions") or {})
+        versions["nvidia-driver"] = driver_version
+        sources = dict(probe.get("sources") or {})
+        issues = [str(issue) for issue in (probe.get("issues") or [])]
+        diagnostics.record_runtime_profile(
+            profile=MINIMAX_H3_CU130_PROFILE,
+            phase="checking installed packages",
+            versions=versions,
+            sources=sources,
+            issues=issues,
+            total_seconds=time.monotonic() - started,
+            in_flight=probe_code != 0,
+        )
+
+        profile_dir = COMFYUI_DIR / ".10sorlabs" / "runtime-profiles"
+        marker = profile_dir / f"{MINIMAX_H3_CU130_PROFILE}.json"
+        signature = {
+            "profile": MINIMAX_H3_CU130_PROFILE,
+            "packages": list(MINIMAX_H3_CU130_PACKAGES),
+            "index": "pytorch-cu130",
+        }
+
+        if probe_code == 0 and not issues:
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps(signature, sort_keys=True), encoding="utf-8")
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="verified",
+                versions=versions,
+                sources=sources,
+                total_seconds=time.monotonic() - started,
+            )
+            self.update(message="PyTorch CUDA 13.0 runtime is already ready.")
+            return
+
+        install_env = os.environ.copy()
+        install_env.pop("PIP_CONSTRAINT", None)
+        install_env.pop("PIP_BUILD_CONSTRAINT", None)
+        install_env["PYTHONNOUSERSITE"] = "1"
+        last_reason = "the installed packages did not match the required CUDA stack"
+
+        for attempt in (1, 2):
+            self.check_cancelled()
+            retrying = attempt == 2
+            self.update(
+                message=(
+                    "Repairing the PyTorch CUDA 13.0 stack…"
+                    if retrying
+                    else "Installing the PyTorch CUDA 13.0 stack…"
+                )
+            )
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="repairing packages" if retrying else "installing packages",
+                attempt=attempt,
+                versions=versions,
+                sources=sources,
+                issues=issues,
+                total_seconds=time.monotonic() - started,
+                in_flight=True,
+            )
+
+            command: list[str | Path] = [
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--no-cache-dir",
+                "--upgrade",
+                "--timeout",
+                "60",
+                "--retries",
+                "3",
+            ]
+            if retrying:
+                command.extend(("--force-reinstall", "--ignore-installed"))
+            command.extend(MINIMAX_H3_CU130_PACKAGES)
+            command.extend(("--index-url", PYTORCH_CU130_INDEX))
+
+            try:
+                returncode, output = await self._run_process(
+                    *command,
+                    timeout=3600,
+                    env=install_env,
+                )
+            except InstallCancelled:
+                raise
+            except RuntimeError as exc:
+                returncode, output = 1, str(exc)
+
+            if returncode:
+                last_reason = self._minimax_cu130_failure_reason(output, returncode)
+
+            probe_code, probe = await self._probe_minimax_cu130_runtime(python)
+            versions = dict(probe.get("versions") or {})
+            versions["nvidia-driver"] = driver_version
+            sources = dict(probe.get("sources") or {})
+            issues = [str(issue) for issue in (probe.get("issues") or [])]
+            if returncode and last_reason not in issues:
+                issues.insert(0, last_reason)
+
+            if probe_code == 0 and not issues:
+                profile_dir.mkdir(parents=True, exist_ok=True)
+                marker.write_text(json.dumps(signature, sort_keys=True), encoding="utf-8")
+                diagnostics.record_runtime_profile(
+                    profile=MINIMAX_H3_CU130_PROFILE,
+                    phase="verified",
+                    attempt=attempt,
+                    versions=versions,
+                    sources=sources,
+                    total_seconds=time.monotonic() - started,
+                )
+                self.state.restart_required = True
+                self.update(message="PyTorch CUDA 13.0 runtime installed and verified.")
+                return
+
+            diagnostics.record_runtime_profile(
+                profile=MINIMAX_H3_CU130_PROFILE,
+                phase="diagnosing before retry" if attempt == 1 else "verification failed",
+                attempt=attempt,
+                versions=versions,
+                sources=sources,
+                issues=issues,
+                total_seconds=time.monotonic() - started,
+                in_flight=attempt == 1,
+            )
+            if attempt == 1:
+                self.update(message="CUDA diagnostics found a mismatch; retrying once…")
+
+        detail = "; ".join(issues[:4]) or last_reason
+        error = f"CUDA 13.0 runtime is incomplete after two attempts: {detail}"
+        diagnostics.record_runtime_profile(
+            profile=MINIMAX_H3_CU130_PROFILE,
+            phase="verification failed",
+            attempt=2,
+            versions=versions,
+            sources=sources,
+            issues=issues,
+            total_seconds=time.monotonic() - started,
+            error=error,
+        )
+        raise RuntimeError(error)
+
     async def _install_runtime_profile(self, profile: str) -> None:
         """Install one vetted native runtime profile from a catalog identifier.
 
@@ -3951,6 +4366,9 @@ class JobController:
         live-updated independently of the Docker image and because its CUDA extension
         must contain the architectures promised by this tile.
         """
+        if profile == MINIMAX_H3_CU130_PROFILE:
+            await self._install_minimax_cu130_runtime()
+            return
         if profile != SAGEATTENTION_PROFILE:
             raise RuntimeError(f"Unsupported runtime profile: {profile}")
         if os.name != "posix":
