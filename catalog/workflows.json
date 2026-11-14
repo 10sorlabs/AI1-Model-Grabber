@@ -1,5 +1,5 @@
 {
-  "version": 28,
+  "version": 29,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -793,16 +793,16 @@
           "repo": "https://github.com/LordLocksley/ComfyUI-Lokken-VideoTools.git"
         },
         {
+          "install_requirements": true,
           "name": "rgthree-comfy",
-          "repo": "https://github.com/rgthree/rgthree-comfy.git",
           "ref": "bc48c6aaeca87bedbc14245d89f9bc6be37a630e",
-          "install_requirements": true
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
         },
         {
+          "install_requirements": true,
           "name": "ComfyUI_Nvidia_VFX_Nodes",
-          "repo": "https://github.com/Comfy-Org/ComfyUI_Nvidia_VFX_Nodes.git",
           "ref": "38d790ded00650681fa3645362efe28c8560cf40",
-          "install_requirements": true
+          "repo": "https://github.com/Comfy-Org/ComfyUI_Nvidia_VFX_Nodes.git"
         }
       ],
       "description": "Install the selected ComfyUI models, custom nodes and the verified PyTorch CUDA 13.0 runtime for this workflow.",
@@ -911,6 +911,14 @@
           "sha256": "96a7bed24f7aa1351c6066666495ee64046faf130f53224f4e4a44b3b49b038d",
           "size_bytes": 2700080,
           "url": "https://civitai.red/api/download/models/3421124?fileId=3315156&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/H3_VBVR_Pro-V2.safetensors",
+          "name": "H3_VBVR_Pro-V2.safetensors",
+          "sha256": "cb3e9f2e395f63e0325213c0b802f26e6d4b6b1caf3f714a969b9aa56242bccb",
+          "size_bytes": 1240538680,
+          "url": "\thttps://civitai.red/api/download/models/3449495?fileId=3349187&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "minimax-h3-v2",
