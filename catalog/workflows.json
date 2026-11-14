@@ -1,5 +1,5 @@
 {
-  "version": 30,
+  "version": 31,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -957,6 +957,46 @@
           "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
           "size_bytes": 5242467968,
           "url": "https://huggingface.co/AlperKTS/Krea2_FP8/resolve/main/qwen3vl_4b_fp8_scaled.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/ImprovedEvilSmile_Krea2.safetensors",
+          "name": "ImprovedEvilSmile_Krea2.safetensors",
+          "sha256": "fcea76050ec6f2550126404e73c856d1f7cadf20e4e4e921f44589496d9a3c82",
+          "size_bytes": 228588904,
+          "url": "https://civitai.red/api/download/models/3105008?fileId=2984804&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/nsfw_helper_slider_loraholic.safetensors",
+          "name": "nsfw_helper_slider_loraholic.safetensors",
+          "sha256": "0278852130a587a6001a904a890474e3b5c04fcd715c0be62870d2eb2b2279c9",
+          "size_bytes": 14345576,
+          "url": "https://civitai.red/api/download/models/3130045?fileId=3010584&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/phone_photography_2025_krea2.safetensors",
+          "name": "phone_photography_2025_krea2.safetensors",
+          "sha256": "fd1052897277f2cc43d7fbcb081026a031a259c7e408efa51b507b1b82ec1126",
+          "size_bytes": 228588904,
+          "url": "https://civitai.red/api/download/models/3123277?fileId=3003694&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/PAWGK2.2.safetensors",
+          "name": "PAWGK2.2.safetensors",
+          "sha256": "21a5949f957a0d9ff5719283224f91c1f7382b13733da4858d2c3ec03bc336a0",
+          "size_bytes": 228588904,
+          "url": "https://civitai.red/api/download/models/3216551?fileId=3098361&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/snofs_krea_v1_6.safetensors",
+          "name": "snofs_krea_v1_6.safetensors",
+          "sha256": "fb6448cadf5293b33b02d650974f6d94280f48315b237198876f0b6a75674f08",
+          "size_bytes": 1562410216,
+          "url": "https://civitai.red/api/download/models/3446779?fileId=3345891&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krea2-pro",
