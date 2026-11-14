@@ -1,5 +1,5 @@
 {
-  "version": 35,
+  "version": 36,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1038,6 +1038,14 @@
           "sha256": "e4385e1f347e78027dcb7f655dc4966a953bfe814a0257f81f5106fdf5e8680b",
           "size_bytes": 12820129124,
           "url": "https://civitai.red/api/download/models/3245099?fileId=3128457&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/RealisticSnapshotKrea2V2.safetensors",
+          "name": "RealisticSnapshotKrea2V2.safetensors",
+          "sha256": "bc064297da569e9f25fe362d8210b291093fad5fa4f59ea982fa4f7c4151e2bc",
+          "size_bytes": 1562410304,
+          "url": "https://civitai.red/api/download/models/3371723?fileId=3260432&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krea2-pro",
