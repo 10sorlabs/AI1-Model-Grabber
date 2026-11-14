@@ -641,6 +641,13 @@ h1 {
   gap: var(--space-3);
 }
 
+.workflow-estimate-note {
+  margin: calc(var(--space-3) * -1) 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
 .workflow-card {
   position: relative;
   display: flex;
@@ -743,6 +750,38 @@ h1 {
   font-size: var(--text-sm);
   font-weight: 550;
   font-variant-numeric: tabular-nums;
+}
+
+.workflow-download-times {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: auto;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-download-times > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--muted-strong);
+}
+
+.workflow-download-times strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.workflow-download-times .is-rapidcache,
+.workflow-download-times .is-rapidcache strong {
+  color: var(--success);
+}
+
+.workflow-download-times small {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-2xs);
 }
 
 /* ---------------------------------------------------------------- job panel --

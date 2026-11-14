@@ -139,6 +139,14 @@ function renderWorkflows(isBusy = false) {
     .map((workflow, index) => {
       const disabled = workflow.disabled || (isBusy && workflow.id !== activeWorkflowId);
       const selected = workflow.id === activeWorkflowId;
+      const estimates = workflow.download_estimates;
+      const downloadSummary = estimates
+        ? `<span class="workflow-download-times">
+            <span><span>Default download</span><strong>~${escapeText(estimates.default_minutes)} min</strong></span>
+            <span class="is-rapidcache"><span>RapidCache</span><strong>~${escapeText(estimates.rapidcache_minutes)} min</strong></span>
+            <small>${escapeText(estimates.total_gb)} GB total</small>
+          </span>`
+        : `<span class="workflow-size">${escapeText(workflow.estimated_size || "")}</span>`;
       return `
         <button
           class="workflow-card${selected ? " is-selected" : ""}${isBusy ? " is-busy" : ""}"
@@ -153,7 +161,7 @@ function renderWorkflows(isBusy = false) {
           </span>
           <h3>${escapeText(workflow.title)}</h3>
           <p class="workflow-description">${escapeText(workflow.description)}</p>
-          <span class="workflow-size">${escapeText(workflow.estimated_size || "")}</span>
+          ${downloadSummary}
         </button>
       `;
     })

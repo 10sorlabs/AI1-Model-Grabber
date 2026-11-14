@@ -212,11 +212,17 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 7
-        assert sum(not item.get("disabled", False) for item in workflows) == 7
+        assert len(workflows) == 8
+        assert sum(not item.get("disabled", False) for item in workflows) == 8
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
+        krea = next(item for item in workflows if item["id"] == "krea-2-extended")
+        assert krea["download_estimates"] == {
+            "total_gb": 25.4,
+            "default_minutes": 8,
+            "rapidcache_minutes": 1,
+        }
 
 
 def test_catalog_contains_installers_but_no_product_workflows() -> None:
@@ -1549,6 +1555,12 @@ def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
             assert not private & set(workflow)
             assert "files" not in workflow
             assert "custom_nodes" not in workflow
+
+    assert remote_public["workflows"][0]["download_estimates"] == {
+        "total_gb": 0.0,
+        "default_minutes": 1,
+        "rapidcache_minutes": 1,
+    }
 
 
 def fake_aria2c(monkeypatch, payload: bytes, recorded: list, returncode: int = 0):
