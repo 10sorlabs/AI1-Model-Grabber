@@ -1,5 +1,5 @@
 {
-  "version": 32,
+  "version": 33,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1022,6 +1022,14 @@
           "sha256": "fb6448cadf5293b33b02d650974f6d94280f48315b237198876f0b6a75674f08",
           "size_bytes": 1562410216,
           "url": "https://civitai.red/api/download/models/3446779?fileId=3345891&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/Muse By Stable Yogi Krea2 V4.0 Extended CIV INT8-ConvRot C86.safetensors",
+          "name": "Muse By Stable Yogi Krea2 V4.0 Extended CIV INT8-ConvRot C86.safetensors",
+          "sha256": "1c045de770519c5acfad3d77cafa4fda0f1b1d836f4931c56e22b85ceb1f6830",
+          "size_bytes": 13491952248,
+          "url": "https://civitai.red/api/download/models/3425119?fileId=3319930&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krea2-pro",
