@@ -50,6 +50,13 @@ COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstr
 COMFYUI_UPSTREAM = "https://github.com/Comfy-Org/ComfyUI.git"
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
 
+# Workflow-card estimates use measured transfer baselines, not marketing best cases.
+# 57 MB/s is the supplied average for a standard Krea 2 download. RapidCache has
+# repeatedly measured 800-2000 MB/s recently and 300-950 MB/s across the older pod
+# sample, so 600 MB/s is deliberately conservative while still representative.
+DEFAULT_DOWNLOAD_BYTES_PER_SECOND = 57_000_000
+RAPIDCACHE_DOWNLOAD_BYTES_PER_SECOND = 600_000_000
+
 SAGEATTENTION_PROFILE = "sageattention-cu128-hopper-blackwell"
 SAGEATTENTION_VERSION = "2.2.0"
 SAGEATTENTION_ARCHITECTURES = "9.0;10.0;12.0"
@@ -678,12 +685,33 @@ def public_catalog() -> dict[str, Any]:
         "estimated_size",
         "disabled",
     }
+    def public_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
+        result = {key: value for key, value in workflow.items() if key in allowed}
+        total_bytes = sum(
+            max(0, int(file_spec.get("size_bytes") or 0))
+            for file_spec in workflow.get("files", [])
+            if isinstance(file_spec, dict)
+        )
+        if total_bytes:
+            minute = 60
+            result["download_estimates"] = {
+                "total_gb": round(total_bytes / 1_000_000_000, 1),
+                "default_minutes": max(
+                    1,
+                    (total_bytes + DEFAULT_DOWNLOAD_BYTES_PER_SECOND * minute - 1)
+                    // (DEFAULT_DOWNLOAD_BYTES_PER_SECOND * minute),
+                ),
+                "rapidcache_minutes": max(
+                    1,
+                    (total_bytes + RAPIDCACHE_DOWNLOAD_BYTES_PER_SECOND * minute - 1)
+                    // (RAPIDCACHE_DOWNLOAD_BYTES_PER_SECOND * minute),
+                ),
+            }
+        return result
+
     return {
         "version": catalog.get("version", 1),
-        "workflows": [
-            {key: value for key, value in workflow.items() if key in allowed}
-            for workflow in catalog["workflows"]
-        ],
+        "workflows": [public_workflow(workflow) for workflow in catalog["workflows"]],
     }
 
 
