@@ -1,5 +1,5 @@
 {
-  "version": 31,
+  "version": 32,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -930,7 +930,32 @@
     {
       "accent": "#5271ff",
       "badge": "NEW",
-      "custom_nodes": [],
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "bc48c6aaeca87bedbc14245d89f9bc6be37a630e",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Custom-Scripts",
+          "ref": "609f3afaa74b2f88ef9ce8d939626065e3247469",
+          "repo": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-SeedVR2_VideoUpscaler",
+          "ref": "4490bd1f482e026674543386bb2a4d176da245b9",
+          "repo": "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Easy-Use",
+          "ref": "d08ce763bc28e952566ecda91235709aa3fc6bbb",
+          "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
+        }
+      ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
       "estimated_size": "Custom setup",
       "files": [
