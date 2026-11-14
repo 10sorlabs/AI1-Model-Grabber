@@ -1,5 +1,5 @@
 {
-  "version": 33,
+  "version": 34,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -954,6 +954,30 @@
           "name": "ComfyUI-Easy-Use",
           "ref": "d08ce763bc28e952566ecda91235709aa3fc6bbb",
           "repo": "https://github.com/yolain/ComfyUI-Easy-Use.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-KJNodes",
+          "ref": "56781c108c520e9c75db140b6886927c1785e3d2",
+          "repo": "https://github.com/kijai/ComfyUI-KJNodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Impact-Subpack",
+          "ref": "50c7b71a6a224734cc9b21963c6d1926816a97f1",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Impact-Pack",
+          "ref": "9e2d41da75c185bf7638f860d5d004035f378e9b",
+          "repo": "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "RES4LYF",
+          "ref": "cb2c312d979b3ab4aaca97a3b70f892f4be554f4",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git"
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
