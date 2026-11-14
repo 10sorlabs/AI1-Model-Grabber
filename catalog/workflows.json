@@ -1,5 +1,5 @@
 {
-  "version": 29,
+  "version": 30,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -926,6 +926,42 @@
       "runtime_profile": "minimax-h3-cu130",
       "title": "MiniMax H3 V2",
       "update_comfyui": true
+    },
+    {
+      "accent": "#5271ff",
+      "badge": "NEW",
+      "custom_nodes": [],
+      "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
+      "estimated_size": "Custom setup",
+      "files": [
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/Realism by Stable Yogi Krea2 V3.0 Extended Civ fp8-scaled C85.safetensors",
+          "name": "Realism by Stable Yogi Krea2 V3.0 Extended Civ fp8-scaled C85.safetensors",
+          "sha256": "3ec3c673d467e0832ad1324fafa8eed5cde9e9f2e250b399d07245e63c904191",
+          "size_bytes": 14128290360,
+          "url": "https://civitai.red/api/download/models/3329215?fileId=3218460&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/krea2RealVae_v10.safetensors",
+          "name": "krea2RealVae_v10.safetensors",
+          "sha256": "0dbbe0baeca04c2b98d2f3809c6f595608939809c88b695ba971368f17c874b8",
+          "size_bytes": 507591212,
+          "url": "https://huggingface.co/artsyww/KREA2REALVAE/resolve/main/krea2RealVae_v10.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+          "name": "qwen3vl_4b_fp8_scaled.safetensors",
+          "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+          "size_bytes": 5242467968,
+          "url": "https://huggingface.co/AlperKTS/Krea2_FP8/resolve/main/qwen3vl_4b_fp8_scaled.safetensors"
+        }
+      ],
+      "id": "krea2-pro",
+      "title": "Krea2 Pro",
+      "update_comfyui": false
     }
   ]
 }
