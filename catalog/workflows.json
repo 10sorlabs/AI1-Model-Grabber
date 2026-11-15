@@ -1,5 +1,5 @@
 {
-  "version": 37,
+  "version": 38,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1078,6 +1078,30 @@
           "sha256": "8daddbb6a9cb035ca4e5866aef60faf84cd3f64f6d6f32eee54b3b360ec06996",
           "size_bytes": 1562410400,
           "url": "https://civitai.red/api/download/models/3305243?fileId=3190258&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+          "name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+          "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622",
+          "size_bytes": 20979314802,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+          "size_bytes": 15687142551,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/minimax_h3_image_vae_fp16.safetensors",
+          "name": "minimax_h3_image_vae_fp16.safetensors",
+          "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af",
+          "size_bytes": 1168505312,
+          "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors"
         }
       ],
       "id": "krea2-pro",
