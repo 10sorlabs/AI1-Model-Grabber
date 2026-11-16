@@ -8,7 +8,7 @@
       content="Install a complete 10sorLabs ComfyUI workflow with one click."
     />
     <title>10sorLabs Model Grabber</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=1.2.0" />
   </head>
   <body>
     <header class="topbar">
@@ -45,6 +45,23 @@
             RapidCache Docs
           </button>
         </nav>
+        <div class="sidebar-tools">
+          <button id="force-comfy-update" class="sidebar-update-button" type="button">
+            Force update ComfyUI
+          </button>
+          <div
+            id="comfy-update-progress"
+            class="sidebar-update-progress"
+            role="status"
+            aria-live="polite"
+            hidden
+          >
+            <span id="comfy-update-message">Preparing update…</span>
+            <span class="sidebar-update-track" aria-hidden="true">
+              <span></span>
+            </span>
+          </div>
+        </div>
       </aside>
 
       <main class="shell">
@@ -592,6 +609,6 @@
       </main>
     </div>
 
-    <script src="/app.js" defer></script>
+    <script src="/app.js?v=1.2.0" defer></script>
   </body>
 </html>
