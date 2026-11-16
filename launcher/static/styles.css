@@ -150,6 +150,8 @@ select {
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   padding: var(--space-6) var(--space-3);
   border-right: 1px solid var(--line);
   background: var(--topbar);
@@ -215,6 +217,113 @@ select {
   background: var(--accent);
   content: "";
   transform: translateY(-50%);
+}
+
+.sidebar-tools {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+  padding: 0 var(--space-1);
+}
+
+.sidebar-update-button {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease;
+}
+
+.sidebar-update-button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sidebar-update-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.sidebar-update-progress {
+  display: grid;
+  gap: 6px;
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.sidebar-update-progress[hidden] {
+  display: none;
+}
+
+.sidebar-update-progress.is-complete {
+  color: var(--success);
+}
+
+.sidebar-update-progress.is-error {
+  color: var(--danger-text);
+}
+
+.sidebar-update-track {
+  position: relative;
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+}
+
+.sidebar-update-track span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: sidebar-update-slide 1.4s ease-in-out infinite;
+}
+
+.sidebar-update-progress.is-complete .sidebar-update-track span,
+.sidebar-update-progress.is-error .sidebar-update-track span {
+  width: 100%;
+  animation: none;
+}
+
+.sidebar-update-progress.is-complete .sidebar-update-track span {
+  background: var(--success);
+}
+
+.sidebar-update-progress.is-error .sidebar-update-track span {
+  background: var(--danger);
+}
+
+@keyframes sidebar-update-slide {
+  0% {
+    transform: translateX(-105%);
+  }
+  55% {
+    transform: translateX(165%);
+  }
+  100% {
+    transform: translateX(270%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-update-track span {
+    width: 100%;
+    animation: none;
+  }
 }
 
 .shell {
@@ -1235,6 +1344,15 @@ h1 {
   .sidebar-nav {
     display: flex;
     gap: var(--space-1);
+  }
+
+  .sidebar-tools {
+    margin-top: var(--space-2);
+    padding: 0;
+  }
+
+  .sidebar-update-button {
+    text-align: center;
   }
 
   .sidebar-link {

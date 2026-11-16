@@ -52,6 +52,9 @@ const elements = {
   installedNodeState: document.querySelector("#installed-node-state"),
   customNodeRestart: document.querySelector("#custom-node-restart-button"),
   customNodeRestartError: document.querySelector("#custom-node-restart-error"),
+  forceComfyUpdate: document.querySelector("#force-comfy-update"),
+  comfyUpdateProgress: document.querySelector("#comfy-update-progress"),
+  comfyUpdateMessage: document.querySelector("#comfy-update-message"),
   tierBadge: document.querySelector("#tier-badge"),
   accountState: document.querySelector("#account-state"),
   accountForm: document.querySelector("#account-form"),
@@ -83,6 +86,7 @@ let pollTimer = null;
 let customPollTimer = null;
 let customNodePollTimer = null;
 let comfyRestartPollTimer = null;
+let comfyUpdatePollTimer = null;
 let modelLocations = [];
 let draftSequence = 0;
 let modelDrafts = [];
@@ -386,6 +390,54 @@ async function restartComfyUI() {
     elements.error.hidden = elements.panel.hidden;
     elements.customNodeRestartError.textContent = error.message;
     elements.customNodeRestartError.hidden = false;
+  }
+}
+
+function renderComfyUpdate(state) {
+  const isRunning = state.status === "running";
+  const isComplete = state.status === "complete";
+  const isError = state.status === "error";
+  elements.forceComfyUpdate.disabled = isRunning;
+  elements.forceComfyUpdate.textContent = isRunning
+    ? "Updating ComfyUI…"
+    : "Force update ComfyUI";
+  elements.comfyUpdateProgress.hidden = state.status === "idle";
+  elements.comfyUpdateProgress.classList.toggle("is-complete", isComplete);
+  elements.comfyUpdateProgress.classList.toggle("is-error", isError);
+  elements.comfyUpdateMessage.textContent =
+    state.error || state.message || "Preparing update…";
+}
+
+async function pollComfyUpdate() {
+  try {
+    const state = await fetchJson("/api/comfy-update");
+    renderComfyUpdate(state);
+    if (state.status !== "running") {
+      window.clearInterval(comfyUpdatePollTimer);
+    }
+  } catch {
+    // Updating and restarting can briefly interrupt the proxy connection. Keep the
+    // last truthful phase visible until the next poll succeeds.
+  }
+}
+
+function beginComfyUpdatePolling() {
+  window.clearInterval(comfyUpdatePollTimer);
+  comfyUpdatePollTimer = window.setInterval(pollComfyUpdate, 1000);
+}
+
+async function forceUpdateComfyUI() {
+  elements.forceComfyUpdate.disabled = true;
+  try {
+    const state = await fetchJson("/api/comfy-update", { method: "POST" });
+    renderComfyUpdate(state);
+    beginComfyUpdatePolling();
+  } catch (error) {
+    renderComfyUpdate({
+      status: "error",
+      message: "ComfyUI could not be updated.",
+      error: error.message,
+    });
   }
 }
 
@@ -1043,6 +1095,7 @@ elements.debugDownload.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 elements.customNodeRestart.addEventListener("click", restartComfyUI);
+elements.forceComfyUpdate.addEventListener("click", forceUpdateComfyUI);
 
 async function initialise() {
   const requestedView = window.location.hash.replace("#", "");
@@ -1087,6 +1140,14 @@ async function initialise() {
     }
   } catch {
     // Restart controls remain available when the status endpoint is briefly unavailable.
+  }
+
+  try {
+    const updateState = await fetchJson("/api/comfy-update");
+    renderComfyUpdate(updateState);
+    if (updateState.status === "running") beginComfyUpdatePolling();
+  } catch {
+    // The action remains available if the status probe fails during first paint.
   }
 
 }

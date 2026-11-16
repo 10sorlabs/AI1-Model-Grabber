@@ -2078,82 +2078,116 @@ class CustomModelController:
             )
 
             url, headers = custom_download_request(item.url)
+            is_huggingface = host_matches(
+                (urlsplit(item.url).hostname or "").lower(),
+                AUTH_HOSTS["huggingface"],
+            )
+            sent_huggingface_token = is_huggingface and "Authorization" in headers
             timeout = httpx.Timeout(connect=30, read=None, write=30, pool=30)
+            remote_sha = ""
+            destination: Path | None = None
             async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-                async with client.stream("GET", url, headers=headers) as response:
-                    if response.status_code in {401, 403}:
-                        raise RuntimeError("Access denied by the model host.")
-                    if response.is_error:
-                        raise RuntimeError(
-                            f"Download failed (HTTP {response.status_code})."
+                for attempt in range(2):
+                    request_headers = dict(headers)
+                    if attempt:
+                        request_headers.pop("Authorization", None)
+                    async with client.stream(
+                        "GET", url, headers=request_headers
+                    ) as response:
+                        if response.status_code in {401, 403}:
+                            if sent_huggingface_token and attempt == 0:
+                                # A stale/revoked token can make a public Hub file fail
+                                # even though the same URL works anonymously. Retry once
+                                # without credentials; gated/private files still fail on
+                                # the second request and keep the actionable error below.
+                                self.update(
+                                    item,
+                                    message=(
+                                        "Hugging Face rejected the saved token; "
+                                        "retrying public access..."
+                                    ),
+                                )
+                                continue
+                            if is_huggingface:
+                                raise RuntimeError(
+                                    "Hugging Face denied access. For a gated or private "
+                                    "model, accept its license and provide a valid HF_TOKEN."
+                                )
+                            raise RuntimeError("Access denied by the model host.")
+                        if response.is_error:
+                            raise RuntimeError(
+                                f"Download failed (HTTP {response.status_code})."
+                            )
+
+                        content_type = response.headers.get("content-type", "").lower()
+                        if "text/html" in content_type:
+                            raise RuntimeError(
+                                "The link returned a web page instead of a model file."
+                            )
+
+                        filename = filename_from_response(response, item.filename)
+                        destination = (folder / filename).resolve()
+                        if not destination.is_relative_to(folder.resolve()):
+                            raise RuntimeError("The download filename is not safe.")
+
+                        partial = destination.with_name(f"{destination.name}.part")
+                        partial.unlink(missing_ok=True)
+
+                        total = int(response.headers.get("content-length", "0") or 0)
+                        linked_size = int(
+                            response.headers.get("x-linked-size", "0") or 0
+                        )
+                        if linked_size > 0:
+                            total = linked_size
+                        remote_sha = response_sha256(response)
+
+                        self.update(
+                            item,
+                            location=location,
+                            filename=filename,
+                            total_bytes=total,
+                            message=f"Checking {filename}...",
                         )
 
-                    content_type = response.headers.get("content-type", "").lower()
-                    if "text/html" in content_type:
-                        raise RuntimeError(
-                            "The link returned a web page instead of a model file."
-                        )
+                        if destination.is_file() and destination.stat().st_size > 0:
+                            same_size = total > 0 and destination.stat().st_size == total
+                            same_hash = False
+                            if same_size and remote_sha:
+                                same_hash = (
+                                    await asyncio.to_thread(file_sha256, destination)
+                                    == remote_sha
+                                )
+                            if same_size and (same_hash or not remote_sha):
+                                self.update(
+                                    item,
+                                    status="skipped",
+                                    message="Model already found — download skipped.",
+                                    downloaded_bytes=destination.stat().st_size,
+                                    total_bytes=destination.stat().st_size,
+                                    bytes_per_second=0,
+                                    percent=100,
+                                    completed_at=utc_now(),
+                                )
+                                return
 
-                    filename = filename_from_response(response, item.filename)
-                    destination = (folder / filename).resolve()
-                    if not destination.is_relative_to(folder.resolve()):
-                        raise RuntimeError("The download filename is not safe.")
+                        started = time.monotonic()
+                        downloaded = 0
+                        self.update(item, message=f"Downloading {filename}...")
+                        with partial.open("wb") as handle:
+                            async for chunk in response.aiter_bytes(1024 * 1024):
+                                handle.write(chunk)
+                                downloaded += len(chunk)
+                                elapsed = max(time.monotonic() - started, 0.01)
+                                percent = (downloaded / total * 100) if total else 0
+                                self.update(
+                                    item,
+                                    downloaded_bytes=downloaded,
+                                    bytes_per_second=downloaded / elapsed,
+                                    percent=percent,
+                                )
+                        break
 
-                    partial = destination.with_name(f"{destination.name}.part")
-                    partial.unlink(missing_ok=True)
-
-                    total = int(response.headers.get("content-length", "0") or 0)
-                    linked_size = int(response.headers.get("x-linked-size", "0") or 0)
-                    if linked_size > 0:
-                        total = linked_size
-                    remote_sha = response_sha256(response)
-
-                    self.update(
-                        item,
-                        location=location,
-                        filename=filename,
-                        total_bytes=total,
-                        message=f"Checking {filename}...",
-                    )
-
-                    if destination.is_file() and destination.stat().st_size > 0:
-                        same_size = total > 0 and destination.stat().st_size == total
-                        same_hash = False
-                        if same_size and remote_sha:
-                            same_hash = (
-                                await asyncio.to_thread(file_sha256, destination)
-                                == remote_sha
-                            )
-                        if same_size and (same_hash or not remote_sha):
-                            self.update(
-                                item,
-                                status="skipped",
-                                message="Model already found — download skipped.",
-                                downloaded_bytes=destination.stat().st_size,
-                                total_bytes=destination.stat().st_size,
-                                bytes_per_second=0,
-                                percent=100,
-                                completed_at=utc_now(),
-                            )
-                            return
-
-                    started = time.monotonic()
-                    downloaded = 0
-                    self.update(item, message=f"Downloading {filename}...")
-                    with partial.open("wb") as handle:
-                        async for chunk in response.aiter_bytes(1024 * 1024):
-                            handle.write(chunk)
-                            downloaded += len(chunk)
-                            elapsed = max(time.monotonic() - started, 0.01)
-                            percent = (downloaded / total * 100) if total else 0
-                            self.update(
-                                item,
-                                downloaded_bytes=downloaded,
-                                bytes_per_second=downloaded / elapsed,
-                                percent=percent,
-                            )
-
-            if not partial or not partial.exists():
+            if not partial or not partial.exists() or destination is None:
                 raise RuntimeError("The model host returned no file data.")
             if item.total_bytes and partial.stat().st_size != item.total_bytes:
                 raise RuntimeError("The downloaded file has an unexpected size.")
@@ -2781,7 +2815,7 @@ class JobController:
         candidate = lines[0].split("\t", 1)[0].strip().lower() if lines else ""
         return candidate if _ONLY_A_SHA.fullmatch(candidate) else ""
 
-    async def _update_comfyui(self) -> None:
+    async def _update_comfyui(self, *, force: bool = False) -> None:
         # First, above the probes. rev-parse on a missing repository fails, _git_head_sha
         # swallows that into "", and the user would get a confusing downstream failure
         # instead of this accurate one.
@@ -2879,8 +2913,8 @@ class JobController:
             head_before = await self._git_head_sha()
             step("checking for a newer version")
             self.check_cancelled()
-            remote_head = await self._remote_master_sha()
-            if head_before and remote_head and head_before == remote_head:
+            remote_head = "" if force else await self._remote_master_sha()
+            if not force and head_before and remote_head and head_before == remote_head:
                 # Returns before set-url, so a pod whose origin points at a fork keeps that
                 # configuration. Deliberate and harmless: _remote_master_sha asks upstream
                 # directly and never reads origin, so this comparison is correct whatever
@@ -2949,7 +2983,7 @@ class JobController:
 
             self.check_cancelled()
             head_after = await self._git_head_sha()
-            if head_before and head_after and head_before == head_after:
+            if not force and head_before and head_after and head_before == head_after:
                 # The same invariant as the shortcut above, for the case where it could not
                 # be taken - a failed ls-remote, say. The reset moved nothing, so the
                 # requirements for this commit are already the ones installed.
@@ -2966,7 +3000,7 @@ class JobController:
             # is no measured problem on this path, and an unmeasured change is how this class
             # of bug starts. The two network flags carry no such risk and are worth having.
             requirements_started = time.monotonic()
-            returncode, output = await self._run_process(
+            pip_args: list[str | Path] = [
                 python,
                 "-m",
                 "pip",
@@ -2975,8 +3009,16 @@ class JobController:
                 "15",
                 "--retries",
                 "3",
-                "-r",
-                requirements,
+            ]
+            if force:
+                # The sidebar action is deliberately stronger than a workflow update:
+                # even an unchanged ComfyUI checkout must reconcile every dependency.
+                # --upgrade keeps packages within ComfyUI's current requirements while
+                # replacing older compatible versions left in a long-running pod.
+                pip_args.append("--upgrade")
+            pip_args.extend(("-r", requirements))
+            returncode, output = await self._run_process(
+                *pip_args,
                 timeout=1800,
             )
             requirements_seconds = time.monotonic() - requirements_started
@@ -5191,6 +5233,62 @@ print(sageattention.__file__, triton.__version__)
         self.update(percent=99, message="Finishing workflow setup…")
 
 
+class ComfyUIUpdateController:
+    """Run the explicit sidebar update without borrowing workflow UI state."""
+
+    def __init__(self) -> None:
+        self.runner = JobController()
+        self.task: asyncio.Task[None] | None = None
+        self.lock = asyncio.Lock()
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.runner.state.export()
+
+    async def start(self) -> dict[str, Any]:
+        async with self.lock:
+            if self.task and not self.task.done():
+                return self.snapshot()
+            self.runner.cancel_event = asyncio.Event()
+            self.runner.state = JobState(
+                status="running",
+                workflow_id="force-comfyui-update",
+                title="Force update ComfyUI",
+                stage="updating",
+                message="Checking the official ComfyUI repository…",
+                comfy_url=comfy_public_url(),
+                started_at=utc_now(),
+            )
+            self.task = asyncio.create_task(self._run())
+            return self.snapshot()
+
+    async def _run(self) -> None:
+        try:
+            await self.runner._update_comfyui(force=True)
+            self.runner.update(
+                stage="restarting",
+                message="Restarting ComfyUI with the updated dependencies…",
+                percent=0,
+            )
+            await comfy_service_controller.start()
+            await comfy_service_controller.wait()
+            self.runner.update(
+                status="complete",
+                stage="complete",
+                message="ComfyUI and its dependencies are up to date.",
+                percent=100,
+                error=None,
+                completed_at=utc_now(),
+            )
+        except Exception as exc:
+            self.runner.update(
+                status="error",
+                stage="error",
+                message="ComfyUI could not be updated.",
+                error=str(exc) or exc.__class__.__name__,
+                completed_at=utc_now(),
+            )
+
+
 def mark_comfy_restart_complete() -> None:
     controller.state.restart_required = False
     for item in custom_node_controller.items.values():
@@ -5203,7 +5301,12 @@ comfy_service_controller = ComfyServiceController()
 controller = JobController()
 custom_model_controller = CustomModelController()
 custom_node_controller = CustomNodeController()
+comfy_update_controller = ComfyUIUpdateController()
 diagnostics = Diagnostics()
+
+
+def task_is_running(task: asyncio.Task[Any] | None) -> bool:
+    return bool(task and not task.done())
 
 
 @asynccontextmanager
@@ -5288,6 +5391,11 @@ async def diagnostics_report() -> str:
 
 @app.post("/api/install/{workflow_id}")
 async def install(workflow_id: str) -> dict[str, Any]:
+    if task_is_running(comfy_update_controller.task):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the ComfyUI update to finish before installing a workflow.",
+        )
     # fresh=True: the URLs the API hands back are time limited.
     catalog_data = await asyncio.to_thread(load_catalog, True)
     workflow = next(
@@ -5320,6 +5428,7 @@ async def restart_comfy() -> dict[str, Any]:
             controller.task,
             custom_model_controller.worker_task,
             custom_node_controller.worker_task,
+            comfy_update_controller.task,
         )
     )
     if busy:
@@ -5330,6 +5439,30 @@ async def restart_comfy() -> dict[str, Any]:
     return await comfy_service_controller.start()
 
 
+@app.get("/api/comfy-update")
+async def comfy_update_status() -> dict[str, Any]:
+    return comfy_update_controller.snapshot()
+
+
+@app.post("/api/comfy-update")
+async def force_update_comfy() -> dict[str, Any]:
+    busy = any(
+        task_is_running(task)
+        for task in (
+            controller.task,
+            custom_model_controller.worker_task,
+            custom_node_controller.worker_task,
+            comfy_service_controller.task,
+        )
+    )
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current install or restart to finish before updating ComfyUI.",
+        )
+    return await comfy_update_controller.start()
+
+
 @app.get("/api/custom-models")
 async def custom_models() -> dict[str, Any]:
     return custom_model_controller.snapshot()
@@ -5337,6 +5470,11 @@ async def custom_models() -> dict[str, Any]:
 
 @app.post("/api/custom-models")
 async def add_custom_model(request: CustomModelRequest) -> dict[str, Any]:
+    if task_is_running(comfy_update_controller.task):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the ComfyUI update to finish before downloading a model.",
+        )
     try:
         return await custom_model_controller.enqueue(request.url, request.location)
     except RuntimeError as exc:
@@ -5350,6 +5488,11 @@ async def custom_nodes() -> dict[str, Any]:
 
 @app.post("/api/custom-nodes")
 async def add_custom_node(request: CustomNodeRequest) -> dict[str, Any]:
+    if task_is_running(comfy_update_controller.task):
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the ComfyUI update to finish before installing a custom node.",
+        )
     try:
         return await custom_node_controller.enqueue(request.url)
     except RuntimeError as exc:

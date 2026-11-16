@@ -237,6 +237,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "krqw2-1",
         "darkdesire-h3",
         "minimax-h3-v2",
+            "krea2-pro",
     ]
     assert {
         "image-generation",
@@ -765,6 +766,67 @@ def test_custom_download_deletes_partial_and_starts_from_scratch(
     assert destination.read_bytes() == payload
     assert not partial.exists()
     assert received_range_headers == [None]
+
+
+def test_huggingface_custom_download_retries_public_access_after_token_rejection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    payload = b"public-huggingface-model"
+    authorization_headers: list[str | None] = []
+
+    class DownloadHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            authorization = self.headers.get("Authorization")
+            authorization_headers.append(authorization)
+            if authorization:
+                self.send_response(401)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DownloadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    comfy_dir = tmp_path / "ComfyUI"
+    comfy_dir.mkdir()
+    monkeypatch.setattr(launcher_app, "COMFYUI_DIR", comfy_dir)
+    monkeypatch.setitem(launcher_app.AUTH_HOSTS, "huggingface", ("127.0.0.1",))
+    monkeypatch.setattr(
+        launcher_app,
+        "custom_download_request",
+        lambda url: (url, {"Authorization": "Bearer stale-token"}),
+    )
+    controller = launcher_app.CustomModelController()
+
+    async def run_download() -> launcher_app.CustomModelState:
+        item = await controller.enqueue(
+            f"http://127.0.0.1:{server.server_port}/public-model.safetensors",
+            "checkpoints",
+        )
+        if controller.worker_task:
+            await controller.worker_task
+        return controller.items[item["id"]]
+
+    try:
+        state = asyncio.run(run_download())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert state.status == "complete"
+    assert authorization_headers == ["Bearer stale-token", None]
+    assert (
+        comfy_dir / "models" / "checkpoints" / "public-model.safetensors"
+    ).read_bytes() == payload
 
 
 def test_custom_download_queue_is_strictly_sequential(tmp_path, monkeypatch) -> None:
@@ -1365,7 +1427,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 7
+    assert len(launcher_app.load_catalog()["workflows"]) == 8
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1378,19 +1440,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 7
+    assert len(launcher_app.load_catalog()["workflows"]) == 8
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 8
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 8
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1491,7 +1553,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 7
+        assert len(catalog["workflows"]) == 8
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1526,7 +1588,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 7
+        assert len(launcher_app.load_catalog()["workflows"]) == 8
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
@@ -5689,6 +5751,65 @@ def test_a_moved_master_still_runs_the_whole_update(tmp_path, monkeypatch) -> No
         "rev-parse",
         "pip",
     ]
+
+
+def test_force_update_fetches_and_upgrades_dependencies_even_when_head_is_unchanged(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    controller, recorded, _messages, _updates = comfyui_update_harness(
+        tmp_path,
+        monkeypatch,
+        heads=[(0, SHA_INSTALLED + "\n"), (0, SHA_INSTALLED + "\n")],
+        remote=(0, f"{SHA_INSTALLED}\trefs/heads/master\n"),
+    )
+
+    asyncio.run(controller._update_comfyui(force=True))
+
+    assert not ran(recorded, "ls-remote")
+    assert ran(recorded, "fetch")
+    assert ran(recorded, "reset")
+    pip = next(command for command in recorded if "pip" in command)
+    assert "--upgrade" in pip
+    assert controller.state.message == "ComfyUI is up to date."
+
+
+def test_force_update_controller_restarts_comfyui_after_dependencies(
+    monkeypatch,
+) -> None:
+    update = launcher_app.ComfyUIUpdateController()
+    forced: list[bool] = []
+
+    async def fake_update(*, force: bool = False) -> None:
+        forced.append(force)
+        update.runner.update(message="Dependencies installed.")
+
+    class RestartController:
+        async def start(self) -> dict:
+            return {"status": "restarting"}
+
+        async def wait(self) -> dict:
+            return {"status": "ready"}
+
+    monkeypatch.setattr(update.runner, "_update_comfyui", fake_update)
+    monkeypatch.setattr(
+        launcher_app,
+        "comfy_service_controller",
+        RestartController(),
+    )
+
+    async def run_update() -> dict:
+        await update.start()
+        if update.task:
+            await update.task
+        return update.snapshot()
+
+    state = asyncio.run(run_update())
+
+    assert forced == [True]
+    assert state["status"] == "complete"
+    assert state["stage"] == "complete"
+    assert state["message"] == "ComfyUI and its dependencies are up to date."
 
 
 def test_a_failed_ls_remote_only_costs_the_shortcut(tmp_path, monkeypatch) -> None:
