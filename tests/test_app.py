@@ -1119,6 +1119,108 @@ def test_workflow_fetches_a_missing_pinned_custom_node_commit(
     )
 
 
+def test_workflow_installs_the_pinned_viggle_node_from_hugging_face(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    custom_nodes_dir = tmp_path / "ComfyUI" / "custom_nodes"
+    custom_nodes_dir.mkdir(parents=True)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes_dir)
+    monkeypatch.setattr(launcher_app, "COMFYUI_VENV", tmp_path / ".venv-cu128")
+
+    controller = launcher_app.JobController()
+    commands: list[tuple[str, ...]] = []
+    revision = "7e5be143702dd53b9154482de673b8519ed2d4d6"
+
+    async def fake_process(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        commands.append(normalized)
+        local_dir = Path(normalized[normalized.index("--local-dir") + 1])
+        source = local_dir / "comfyui" / "ComfyUI-Viggle-Remake"
+        source.mkdir(parents=True)
+        (source / "__init__.py").write_text("", encoding="utf-8")
+        (source / "nodes.py").write_text("", encoding="utf-8")
+        return 0, "downloaded"
+
+    monkeypatch.setattr(controller, "_run_process", fake_process)
+    node = {
+        "name": "ComfyUI-Viggle-Remake",
+        "repo": "https://huggingface.co/Viggle/Viggle-Remake",
+        "ref": revision,
+        "install_requirements": True,
+    }
+
+    asyncio.run(controller._install_custom_node(node))
+    # A second install validates the source marker and does not download it again.
+    asyncio.run(controller._install_custom_node(node))
+
+    assert len(commands) == 1
+    command = commands[0]
+    assert command[:3] == ("hf", "download", "Viggle/Viggle-Remake")
+    assert command[command.index("--revision") + 1] == revision
+    assert command[command.index("--include") + 1] == (
+        "comfyui/ComfyUI-Viggle-Remake/*"
+    )
+    destination = custom_nodes_dir / "ComfyUI-Viggle-Remake"
+    assert (destination / "nodes.py").exists()
+    marker = json.loads(
+        (destination / ".10sorlabs-huggingface-source.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker == {"repo": "Viggle/Viggle-Remake", "revision": revision}
+    assert controller.state.restart_required is True
+    assert not list(custom_nodes_dir.glob(".10sorlabs-*.part"))
+
+
+def test_a_failed_viggle_hugging_face_download_cleans_its_staging_folder(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    custom_nodes_dir = tmp_path / "ComfyUI" / "custom_nodes"
+    custom_nodes_dir.mkdir(parents=True)
+    monkeypatch.setattr(launcher_app, "CUSTOM_NODES_DIR", custom_nodes_dir)
+    controller = launcher_app.JobController()
+
+    async def failed_download(*command, **_bounds) -> tuple[int, str]:
+        normalized = tuple(str(part) for part in command)
+        local_dir = Path(normalized[normalized.index("--local-dir") + 1])
+        local_dir.mkdir(parents=True)
+        (local_dir / "partial").write_text("partial", encoding="utf-8")
+        return 1, "simulated failure"
+
+    monkeypatch.setattr(controller, "_run_process", failed_download)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        asyncio.run(
+            controller._install_custom_node(
+                {
+                    "name": "ComfyUI-Viggle-Remake",
+                    "repo": "https://huggingface.co/Viggle/Viggle-Remake",
+                    "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
+                }
+            )
+        )
+
+    assert not (custom_nodes_dir / "ComfyUI-Viggle-Remake").exists()
+    assert not list(custom_nodes_dir.glob(".10sorlabs-*.part"))
+
+
+def test_other_hugging_face_repositories_cannot_be_custom_nodes() -> None:
+    controller = launcher_app.JobController()
+
+    with pytest.raises(RuntimeError, match="must use a GitHub HTTPS URL"):
+        asyncio.run(
+            controller._install_custom_node(
+                {
+                    "name": "Unreviewed-Node",
+                    "repo": "https://huggingface.co/example/unreviewed",
+                    "ref": "a" * 40,
+                }
+            )
+        )
+
+
 def test_workflow_skips_failed_custom_node_and_continues(
     tmp_path,
     monkeypatch,

@@ -42,6 +42,11 @@ COMFYUI_DIR = Path(
     os.getenv("COMFYUI_DIR", "/workspace/runpod-slim/ComfyUI")
 ).resolve()
 CUSTOM_NODES_DIR = COMFYUI_DIR / "custom_nodes"
+VIGGLE_REMAKE_NODE_NAME = "ComfyUI-Viggle-Remake"
+VIGGLE_REMAKE_REPO = "https://huggingface.co/Viggle/Viggle-Remake"
+VIGGLE_REMAKE_HF_REPO_ID = "Viggle/Viggle-Remake"
+VIGGLE_REMAKE_INCLUDE = "comfyui/ComfyUI-Viggle-Remake/*"
+VIGGLE_REMAKE_SOURCE_DIR = PurePosixPath("comfyui/ComfyUI-Viggle-Remake")
 COMFYUI_VENV = COMFYUI_DIR / ".venv-cu128"
 COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstrip("/")
 # One spelling, used both to pin `origin` and to ask what master is. Two literals could
@@ -4930,7 +4935,11 @@ print(sageattention.__file__, triton.__version__)
         if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
             raise RuntimeError(f"Unsafe custom node name: {name!r}")
         repo = str(node.get("repo", "")).strip()
-        if not repo.startswith("https://github.com/"):
+        is_viggle_huggingface_node = (
+            name == VIGGLE_REMAKE_NODE_NAME
+            and repo.rstrip("/") == VIGGLE_REMAKE_REPO
+        )
+        if not repo.startswith("https://github.com/") and not is_viggle_huggingface_node:
             raise RuntimeError(f"Custom node {name} must use a GitHub HTTPS URL.")
         # A ref reaches git's argv, and anything starting with "-" is read as an
         # option. This validation is what makes that unreachable from a remote catalog:
@@ -4941,7 +4950,8 @@ print(sageattention.__file__, triton.__version__)
         # Only the first-party Regeneration Gate may follow moving main. All
         # third-party custom nodes remain pinned for reproducibility.
         live_10sor_main = (
-            name == "ComfyUI-10SOR-Regeneration-Gate"
+            not is_viggle_huggingface_node
+            and name == "ComfyUI-10SOR-Regeneration-Gate"
             and normalized_git_remote(repo)
             == normalized_git_remote("https://github.com/10sorlabs/ComfyUI-10SOR-Regeneration-Gate.git")
             and ref == "main"
@@ -4955,7 +4965,61 @@ print(sageattention.__file__, triton.__version__)
         if not destination.is_relative_to(CUSTOM_NODES_DIR.resolve()):
             raise RuntimeError(f"Unsafe custom node destination: {name}")
 
-        if not destination.exists():
+        if is_viggle_huggingface_node:
+            marker_name = ".10sorlabs-huggingface-source.json"
+            expected_marker = {
+                "repo": VIGGLE_REMAKE_HF_REPO_ID,
+                "revision": ref.lower(),
+            }
+            marker = destination / marker_name
+            if destination.exists():
+                try:
+                    installed_source = json.loads(marker.read_text(encoding="utf-8"))
+                except (FileNotFoundError, json.JSONDecodeError):
+                    installed_source = None
+                if installed_source != expected_marker:
+                    raise RuntimeError(
+                        f"The existing {name} folder is not the expected Hugging Face download."
+                    )
+            else:
+                step("downloading from Hugging Face")
+                clone_started = time.monotonic()
+                staging = (CUSTOM_NODES_DIR / f".10sorlabs-{name}.part").resolve()
+                if not staging.is_relative_to(CUSTOM_NODES_DIR.resolve()):
+                    raise RuntimeError(f"Unsafe custom node staging path: {name}")
+                shutil.rmtree(staging, ignore_errors=True)
+                download_root = staging / "download"
+                source = download_root.joinpath(*VIGGLE_REMAKE_SOURCE_DIR.parts)
+                try:
+                    returncode, output = await self._run_process(
+                        "hf",
+                        "download",
+                        VIGGLE_REMAKE_HF_REPO_ID,
+                        "--revision",
+                        ref,
+                        "--include",
+                        VIGGLE_REMAKE_INCLUDE,
+                        "--local-dir",
+                        download_root,
+                        timeout=600,
+                    )
+                    if returncode:
+                        raise RuntimeError(
+                            f"Could not install custom node {name}: {output[-500:]}"
+                        )
+                    if not source.is_dir():
+                        raise RuntimeError(
+                            f"Hugging Face did not provide the expected {name} folder."
+                        )
+                    (source / marker_name).write_text(
+                        json.dumps(expected_marker, sort_keys=True),
+                        encoding="utf-8",
+                    )
+                    source.rename(destination)
+                finally:
+                    shutil.rmtree(staging, ignore_errors=True)
+                clone_seconds = time.monotonic() - clone_started
+        elif not destination.exists():
             step("cloning")
             clone_started = time.monotonic()
             try:
@@ -5005,7 +5069,10 @@ print(sageattention.__file__, triton.__version__)
                     f"The existing {name} folder is not the expected Git repository."
                 )
 
-        if live_10sor_main:
+        if is_viggle_huggingface_node:
+            # The pinned Hugging Face snapshot above is already the selected revision.
+            pass
+        elif live_10sor_main:
             # Freshly fetch main on EVERY install, including existing checkouts.
             # Fast-forward only: preserve local edits and never force-reset.
             for label, command in (

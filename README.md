@@ -147,6 +147,20 @@ and custom nodes:
 }
 ```
 
+Workflow custom nodes normally use pinned GitHub repositories. The single reviewed
+exception is Viggle Remake, whose node code lives inside its Hugging Face model
+repository. Use this exact entry; the launcher downloads only the nested ComfyUI
+folder at the pinned revision:
+
+```json
+{
+  "name": "ComfyUI-Viggle-Remake",
+  "repo": "https://huggingface.co/Viggle/Viggle-Remake",
+  "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
+  "install_requirements": true
+}
+```
+
 Set `update_comfyui` to `true` when a preset requires the newest ComfyUI code.
 Before downloading that preset, the launcher updates from
 `Comfy-Org/ComfyUI:master` and installs its requirements into the ComfyUI Python
