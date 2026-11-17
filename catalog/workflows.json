@@ -1,5 +1,5 @@
 {
-  "version": 39,
+  "version": 40,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1146,6 +1146,38 @@
           "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
           "size_bytes": 605254808,
           "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/qwen3vl_8b_bf16.safetensors",
+          "name": "qwen3vl_8b_bf16.safetensors",
+          "sha256": "68bdc82bc1b66851162ae656225e7e2068166b603db19bd5d5a3b90eb12669a9",
+          "size_bytes": 17534334616,
+          "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/qwen_image_2.1_vae_bf16.safetensors",
+          "name": "qwen_image_2.1_vae_bf16.safetensors",
+          "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+          "size_bytes": 675509688,
+          "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/lenovo_qwen21.safetensors",
+          "name": "lenovo_qwen21.safetensors",
+          "sha256": "7f1e95c3ec1e9c7cea197f7b6f80f601af8e6b479f6ead78ab16df542f447c0e",
+          "size_bytes": 79743896,
+          "url": "https://huggingface.co/gravedigga/loras/resolve/main/lenovo_qwen21.safetensors"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/bfs_head_v1.1_qwen_2.1.safetensors",
+          "name": "bfs_head_v1.1_qwen_2.1.safetensors",
+          "sha256": "d1d748d5601077f3b6d05766f6823510e901970d916afa404a97e85dc92fa88e",
+          "size_bytes": 260096144,
+          "url": "https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap/resolve/main/bfs_head_v1.1_qwen_2.1.safetensors"
         }
       ],
       "id": "h3-motion-control",
