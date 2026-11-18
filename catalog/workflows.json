@@ -1124,6 +1124,14 @@
           "url": "https://huggingface.co/Viggle/Viggle-Remake/resolve/main/int8/viggle_remake_swap_pruned_int8_convrot.safetensors?download=true"
         },
         {
+          "auth": "civitai",
+          "destination": "models/diffusion_models/redgptK2T2W6A8REDQW21_redqw21UNLOCKEDV2_fp8.safetensors",
+          "name": "REDGPT FP8",
+          "sha256": "0efb5aeb2b372025042e320c2e35c66ec6681ef54ad5de88a652ab19cc63ad92",
+          "size_bytes": 7116801326,
+          "url": "https://civitai.com/api/download/models/3370753?fileId=3258921"
+        },
+        {
           "auth": "none",
           "destination": "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
           "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
