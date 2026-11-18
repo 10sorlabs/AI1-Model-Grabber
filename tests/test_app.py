@@ -212,8 +212,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 8
-        assert sum(not item.get("disabled", False) for item in workflows) == 8
+        assert len(workflows) == 9
+        assert sum(not item.get("disabled", False) for item in workflows) == 9
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -237,7 +237,8 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "krqw2-1",
         "darkdesire-h3",
         "minimax-h3-v2",
-            "krea2-pro",
+        "krea2-pro",
+        "h3-motion-control",
     ]
     assert {
         "image-generation",
@@ -464,6 +465,24 @@ def test_minimax_h3_v2_installs_the_cu130_runtime_profile() -> None:
     assert installer["manager_security_level"] == "weak"
     assert installer["update_comfyui"] is True
     assert "CUDA 13.0" in installer["description"]
+
+
+def test_h3_motion_control_installs_viggle_and_the_cu130_runtime() -> None:
+    catalog = launcher_app.load_catalog()
+    installer = next(
+        item for item in catalog["workflows"] if item["id"] == "h3-motion-control"
+    )
+
+    assert installer["runtime_profile"] == launcher_app.MINIMAX_H3_CU130_PROFILE
+    assert installer["update_comfyui"] is True
+    assert installer["custom_nodes"] == [
+        {
+            "install_requirements": True,
+            "name": "ComfyUI-Viggle-Remake",
+            "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
+            "repo": "https://huggingface.co/Viggle/Viggle-Remake",
+        }
+    ]
 
 
 def test_minimax_h3_v2_keeps_its_runtime_on_an_older_remote_catalog(
@@ -1529,7 +1548,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 8
+    assert len(launcher_app.load_catalog()["workflows"]) == 9
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1542,19 +1561,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 8
+    assert len(launcher_app.load_catalog()["workflows"]) == 9
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 8
+        assert len(launcher_app.load_catalog()["workflows"]) == 9
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 8
+        assert len(launcher_app.load_catalog()["workflows"]) == 9
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1655,7 +1674,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 8
+        assert len(catalog["workflows"]) == 9
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1690,7 +1709,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 8
+        assert len(launcher_app.load_catalog()["workflows"]) == 9
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:

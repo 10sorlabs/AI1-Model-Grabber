@@ -1111,8 +1111,15 @@
     {
       "accent": "#5271ff",
       "badge": "NEW",
-      "custom_nodes": [],
-      "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-Viggle-Remake",
+          "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
+          "repo": "https://huggingface.co/Viggle/Viggle-Remake"
+        }
+      ],
+      "description": "Install the H3 Motion Control and Viggle Remake stack with its reviewed ComfyUI node and CUDA 13 runtime.",
       "estimated_size": "Custom setup",
       "files": [
         {
@@ -1189,8 +1196,9 @@
         }
       ],
       "id": "h3-motion-control",
+      "runtime_profile": "minimax-h3-cu130",
       "title": "H3 Motion Control",
-      "update_comfyui": false
+      "update_comfyui": true
     }
   ]
 }
