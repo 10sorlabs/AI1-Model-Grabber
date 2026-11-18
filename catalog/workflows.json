@@ -1,5 +1,5 @@
 {
-  "version": 40,
+  "version": 41,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1199,6 +1199,26 @@
       "runtime_profile": "minimax-h3-cu130",
       "title": "H3 Motion Control",
       "update_comfyui": true
+    },
+    {
+      "accent": "#5271ff",
+      "badge": "NEW",
+      "custom_nodes": [],
+      "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
+      "estimated_size": "Custom setup",
+      "files": [
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/KRASTINT8.safetensors",
+          "name": "KRASTINT8.safetensors",
+          "sha256": "26546f02a3c4eeba130dd1c7f67de63a97eeb951f30b85c6d49cf67b10c27a4b",
+          "size_bytes": 12829331808,
+          "url": "https://civitai.red/api/download/models/3145550?fileId=3026008&token=f7090e2b4aa459516413d7c017ee6f9a"
+        }
+      ],
+      "id": "krast",
+      "title": "KRAST",
+      "update_comfyui": false
     }
   ]
 }
