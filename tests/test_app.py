@@ -515,6 +515,31 @@ def test_minimax_h3_v2_keeps_its_runtime_on_an_older_remote_catalog(
     ]
 
 
+def test_h3_motion_control_keeps_its_runtime_on_an_older_remote_catalog(
+    monkeypatch,
+) -> None:
+    controller = launcher_app.JobController()
+    events = []
+
+    monkeypatch.setattr(controller, "_wait_for_comfyui", lambda: asyncio.sleep(0))
+
+    async def fake_update() -> None:
+        events.append("update-comfyui")
+
+    async def fake_runtime(profile: str) -> None:
+        events.append(f"runtime:{profile}")
+
+    monkeypatch.setattr(controller, "_update_comfyui", fake_update)
+    monkeypatch.setattr(controller, "_install_runtime_profile", fake_runtime)
+
+    asyncio.run(controller._install_workflow({"id": "h3-motion-control"}))
+
+    assert events == [
+        "update-comfyui",
+        f"runtime:{launcher_app.MINIMAX_H3_CU130_PROFILE}",
+    ]
+
+
 def test_manager_security_config_is_created_in_the_new_system_user_location(
     tmp_path,
     monkeypatch,

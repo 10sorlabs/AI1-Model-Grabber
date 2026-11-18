@@ -3110,12 +3110,14 @@ class JobController:
         # Older remote catalogs may already expose this tile without its new profile.
         # The tile id is first-party and fixed, so keep every required bootstrap step
         # attached while a pod is between the launcher update and a catalog refresh.
-        if workflow.get("id") == "minimax-h3-v2":
+        workflow_id = workflow.get("id")
+        if workflow_id in {"minimax-h3-v2", "h3-motion-control"}:
             runtime_profile = runtime_profile or MINIMAX_H3_CU130_PROFILE
+            should_update_comfyui = True
+        if workflow_id == "minimax-h3-v2":
             manager_security_level = (
                 manager_security_level or MINIMAX_H3_MANAGER_SECURITY_LEVEL
             )
-            should_update_comfyui = True
         if (
             not files
             and not nodes
