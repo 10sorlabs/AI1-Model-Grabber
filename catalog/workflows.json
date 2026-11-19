@@ -1,5 +1,5 @@
 {
-  "version": 45,
+  "version": 46,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1201,6 +1201,12 @@
           "name": "ComfyUI_LC_MaskMaker_nodes",
           "ref": "1f32798b6be87f8d99fd4e1e89c13a191252ff61",
           "repo": "https://github.com/lonecatone23/ComfyUI_LC_MaskMaker_nodes.git"
+        },
+        {
+          "name": "RES4LYF",
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
+          "ref": "cb2c312d979b3ab4aaca97a3b70f892f4be554f4",
+          "install_requirements": true
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
