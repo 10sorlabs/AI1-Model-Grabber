@@ -1,5 +1,5 @@
 {
-  "version": 42,
+  "version": 43,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -919,6 +919,22 @@
           "sha256": "cb3e9f2e395f63e0325213c0b802f26e6d4b6b1caf3f714a969b9aa56242bccb",
           "size_bytes": 1240538680,
           "url": "\thttps://civitai.red/api/download/models/3449495?fileId=3349187&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/h3_Better_NSFW_Motion_V1.safetensors",
+          "name": "h3_Better_NSFW_Motion_V1.safetensors",
+          "sha256": "15615bf5aef77b974dba6cd109c547fb8a9a5d36a68fd38b3bd3578e59d3545a",
+          "size_bytes": 298261888,
+          "url": "https://civitai.red/api/download/models/3257589?fileId=3140780&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/diffusion_models/PlagueKind-tiddies-realismslider.safetensors",
+          "name": "PlagueKind-tiddies-realismslider.safetensors",
+          "sha256": "e5c8c275af58663a664ad2922cc10a248bff70b941043375d2c82d9cc55b7030",
+          "size_bytes": 77580824,
+          "url": "https://civitai.red/api/download/models/3229050?fileId=3111384&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "minimax-h3-v2",
