@@ -1,5 +1,5 @@
 {
-  "version": 41,
+  "version": 42,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1117,6 +1117,12 @@
           "name": "ComfyUI-Viggle-Remake",
           "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
           "repo": "https://huggingface.co/Viggle/Viggle-Remake"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI-VideoHelperSuite",
+          "ref": "4d907bee61e92c2e65af3bd6383a4e4d356126d1",
+          "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
         }
       ],
       "description": "Install the H3 Motion Control and Viggle Remake stack with its reviewed ComfyUI node and CUDA 13 runtime.",
@@ -1209,11 +1215,27 @@
       "files": [
         {
           "auth": "none",
-          "destination": "models/diffusion_models/KRASTINT8.safetensors",
-          "name": "KRASTINT8.safetensors",
-          "sha256": "26546f02a3c4eeba130dd1c7f67de63a97eeb951f30b85c6d49cf67b10c27a4b",
-          "size_bytes": 12829331808,
-          "url": "https://civitai.red/api/download/models/3145550?fileId=3026008&token=f7090e2b4aa459516413d7c017ee6f9a"
+          "destination": "models/diffusion_models/Krast-Raw-bf16.safetensors",
+          "name": "Krast-Raw-bf16.safetensors",
+          "sha256": "3b2c89871d08bb13e8bf166edb9fd2e23c1349b9b48a0e1cad095f3f03a03335",
+          "size_bytes": 25640200576,
+          "url": "https://civitai.red/api/download/models/3157041?fileId=3038186&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/KreaVaeReal.safetensors",
+          "name": "KreaVaeReal.safetensors",
+          "sha256": "0dbbe0baeca04c2b98d2f3809c6f595608939809c88b695ba971368f17c874b8",
+          "size_bytes": 507591212,
+          "url": "https://civitai.red/api/download/models/3068442?fileId=2947164&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/text_encoders/qwen3vl_4b_instruct_heretic_7refusal_int8_convrot.safetensors",
+          "name": "qwen3vl_4b_instruct_heretic_7refusal_int8_convrot.safetensors",
+          "sha256": "e2ec7cf7f166ee6927144787a153ef02ea41f1f56c62878af68d7b5db59eae36",
+          "size_bytes": 5246908680,
+          "url": "https://civitai.red/api/download/models/3099765?fileId=2979509&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krast",
