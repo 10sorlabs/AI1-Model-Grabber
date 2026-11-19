@@ -1,5 +1,5 @@
 {
-  "version": 46,
+  "version": 47,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1203,10 +1203,10 @@
           "repo": "https://github.com/lonecatone23/ComfyUI_LC_MaskMaker_nodes.git"
         },
         {
+          "install_requirements": true,
           "name": "RES4LYF",
-          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git",
           "ref": "cb2c312d979b3ab4aaca97a3b70f892f4be554f4",
-          "install_requirements": true
+          "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git"
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
@@ -1263,7 +1263,8 @@
       ],
       "id": "krast",
       "title": "KRAST",
-      "update_comfyui": false
+      "update_comfyui": true,
+      "model_links": []
     }
   ]
 }
