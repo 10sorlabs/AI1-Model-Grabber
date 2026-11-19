@@ -1,5 +1,5 @@
 {
-  "version": 43,
+  "version": 44,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -810,14 +810,6 @@
       "files": [
         {
           "auth": "none",
-          "destination": "models/diffusion_models/Minimax-h3_Singularity_ref2va_v2_int8.safetensors",
-          "name": "Minimax-h3_Singularity_ref2va_v2_int8.safetensors",
-          "sha256": "db3ec568863db6f5ec1840210d41653afef73d4df7b0cb489c52ad458b6f8a7f",
-          "size_bytes": 34004507622,
-          "url": "https://huggingface.co/WarmBloodAban/Minimax-h3_Singularity/resolve/main/Minimax-h3_Singularity_ref2va_v2_int8.safetensors"
-        },
-        {
-          "auth": "none",
           "destination": "models/vae/minimax_h3_audio_vae_fp32.safetensors",
           "name": "minimax_h3_audio_vae_fp32.safetensors",
           "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
@@ -831,22 +823,6 @@
           "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
           "size_bytes": 5207808496,
           "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors"
-        },
-        {
-          "auth": "none",
-          "destination": "models/loras/minimax_h3_lms_v1.0_r64.safetensors",
-          "name": "minimax_h3_lms_v1.0_r64.safetensors",
-          "sha256": "16f3195bc6bffa431c0598dc2031e520ba058b4fcbc9f104db9e3fdfdeacf60c",
-          "size_bytes": 1239664536,
-          "url": "https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI/resolve/main/loras/minimax_h3_lms_v1.0_r64.safetensors"
-        },
-        {
-          "auth": "none",
-          "destination": "models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_resized_avg_rank_21_bf16.safetensors",
-          "name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_resized_avg_rank_21_bf16.safetensors",
-          "sha256": "2c6abb194cff3e26c2295c87892913adf0c92d8f784f305238246759f9b333d0",
-          "size_bytes": 326935264,
-          "url": "https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/resolve/main/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_resized_avg_rank_21_bf16.safetensors"
         },
         {
           "auth": "none",
@@ -887,30 +863,6 @@
           "sha256": "b1361691a953ff7623e5dc628a76e338d592da12e3c9d5652cecb7eeaaa4aa94",
           "size_bytes": 40222934448,
           "url": "https://civitai.red/api/download/models/3429412?fileId=3330999&token=fdbb802d4a22b22939cdc61b422acc69&utm_source=chatgpt.com"
-        },
-        {
-          "auth": "none",
-          "destination": "models/diffusion_models/MysticXXX_MMH3-V5.safetensors",
-          "name": "MysticXXX_MMH3-V5.safetensors",
-          "sha256": "4168917daeb6e570a004bc6994f73d091b9f3e887f7e946bd00c0f2f7573e5f3",
-          "size_bytes": 298932824,
-          "url": "https://civitai.red/api/download/models/3416478?fileId=3309543&token=f7090e2b4aa459516413d7c017ee6f9a"
-        },
-        {
-          "auth": "none",
-          "destination": "models/loras/MysticXXX_MMH3-V5-ref2va.safetensors",
-          "name": "MysticXXX_MMH3-V5-ref2va.safetensors",
-          "sha256": "f57c76e761f7a5113e541ad58e84c648a5fe4d3cfbc277d0c44ae9763da29afe",
-          "size_bytes": 138339432,
-          "url": "https://civitai.red/api/download/models/3416478?fileId=3311427&token=f7090e2b4aa459516413d7c017ee6f9a"
-        },
-        {
-          "auth": "none",
-          "destination": "models/loras/MMH3-RealismSlider-V1.safetensors",
-          "name": "MMH3-RealismSlider-V1.safetensors",
-          "sha256": "96a7bed24f7aa1351c6066666495ee64046faf130f53224f4e4a44b3b49b038d",
-          "size_bytes": 2700080,
-          "url": "https://civitai.red/api/download/models/3421124?fileId=3315156&token=f7090e2b4aa459516413d7c017ee6f9a"
         },
         {
           "auth": "none",
