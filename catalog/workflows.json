@@ -1,5 +1,5 @@
 {
-  "version": 44,
+  "version": 45,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1177,7 +1177,32 @@
     {
       "accent": "#5271ff",
       "badge": "NEW",
-      "custom_nodes": [],
+      "custom_nodes": [
+        {
+          "install_requirements": true,
+          "name": "rgthree-comfy",
+          "ref": "bc48c6aaeca87bedbc14245d89f9bc6be37a630e",
+          "repo": "https://github.com/rgthree/rgthree-comfy.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI_LC_Vision_nodes",
+          "ref": "ec0423fa88e5fde68c50d0fd722de78b294dd885",
+          "repo": "https://github.com/lonecatone23/ComfyUI_LC_Vision_nodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI_LC123_nodes",
+          "ref": "59f8963b907cbe54a915bffdd6757e23c8c619e5",
+          "repo": "https://github.com/lonecatone23/ComfyUI_LC123_nodes.git"
+        },
+        {
+          "install_requirements": true,
+          "name": "ComfyUI_LC_MaskMaker_nodes",
+          "ref": "1f32798b6be87f8d99fd4e1e89c13a191252ff61",
+          "repo": "https://github.com/lonecatone23/ComfyUI_LC_MaskMaker_nodes.git"
+        }
+      ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
       "estimated_size": "Custom setup",
       "files": [
@@ -1204,6 +1229,30 @@
           "sha256": "e2ec7cf7f166ee6927144787a153ef02ea41f1f56c62878af68d7b5db59eae36",
           "size_bytes": 5246908680,
           "url": "https://civitai.red/api/download/models/3099765?fileId=2979509&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/lenovo_krea2.safetensors",
+          "name": "lenovo_krea2.safetensors",
+          "sha256": "6967840059e54d0ca6771ae00acdc5979266f761175a8c9380f23f1a3723e9a2",
+          "size_bytes": 114324736,
+          "url": "https://civitai.red/api/download/models/3075606?fileId=2954661&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/RealisticSnapshotKrea2V2.safetensors",
+          "name": "RealisticSnapshotKrea2V2.safetensors",
+          "sha256": "bc064297da569e9f25fe362d8210b291093fad5fa4f59ea982fa4f7c4151e2bc",
+          "size_bytes": 1562410304,
+          "url": "https://civitai.red/api/download/models/3371723?fileId=3260432&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/(Krea 2) 8-Step Turbo Distill Rank 256 V2026.1.safetensors",
+          "name": "(Krea 2) 8-Step Turbo Distill Rank 256 V2026.1.safetensors",
+          "sha256": "ca178303453e1152d0e08a36240509b4711c3ccb7596915a20e910c973dd42ae",
+          "size_bytes": 1872209738,
+          "url": "https://civitai.com/api/download/models/3089600?fileId=2969169&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krast",
