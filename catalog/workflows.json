@@ -1,5 +1,5 @@
 {
-  "version": 47,
+  "version": 48,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1259,12 +1259,20 @@
           "sha256": "ca178303453e1152d0e08a36240509b4711c3ccb7596915a20e910c973dd42ae",
           "size_bytes": 1872209738,
           "url": "https://civitai.com/api/download/models/3089600?fileId=2969169&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/Krea2-realism-V2.safetensors",
+          "name": "Krea2-realism-V2.safetensors",
+          "sha256": "fb0048ce3340adc2842ccfcc1a9a61a9773b6628b01ae5a2e139ca9c679e715d",
+          "size_bytes": 1562410344,
+          "url": "https://civitai.red/api/download/models/3090634?fileId=2970148&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krast",
+      "model_links": [],
       "title": "KRAST",
-      "update_comfyui": true,
-      "model_links": []
+      "update_comfyui": true
     }
   ]
 }
