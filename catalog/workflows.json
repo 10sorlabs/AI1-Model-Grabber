@@ -1,5 +1,5 @@
 {
-  "version": 48,
+  "version": 49,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1207,6 +1207,12 @@
           "name": "RES4LYF",
           "ref": "cb2c312d979b3ab4aaca97a3b70f892f4be554f4",
           "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git"
+        },
+        {
+          "name": "ComfyUI-10sorLabs-Sampler",
+          "repo": "https://github.com/10sorlabs/ComfyUI-10sorLabs-Sampler.git",
+          "ref": "83888ddcafca7f5a07a62a75b6af0298d4f7e9cd",
+          "install_requirements": true
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
@@ -1267,6 +1273,14 @@
           "sha256": "fb0048ce3340adc2842ccfcc1a9a61a9773b6628b01ae5a2e139ca9c679e715d",
           "size_bytes": 1562410344,
           "url": "https://civitai.red/api/download/models/3090634?fileId=2970148&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/vae/wan21-vae.safetensors",
+          "name": "wan21-vae.safetensors",
+          "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
+          "size_bytes": 253815318,
+          "url": "https://huggingface.co/wangkanai/wan21-vae/resolve/main/vae/wan/wan21-vae.safetensors?download=true"
         }
       ],
       "id": "krast",
