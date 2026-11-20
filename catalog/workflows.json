@@ -1,5 +1,5 @@
 {
-  "version": 49,
+  "version": 50,
   "workflows": [
     {
       "accent": "#5271ff",
@@ -1209,10 +1209,10 @@
           "repo": "https://github.com/ClownsharkBatwing/RES4LYF.git"
         },
         {
+          "install_requirements": true,
           "name": "ComfyUI-10sorLabs-Sampler",
-          "repo": "https://github.com/10sorlabs/ComfyUI-10sorLabs-Sampler.git",
           "ref": "83888ddcafca7f5a07a62a75b6af0298d4f7e9cd",
-          "install_requirements": true
+          "repo": "https://github.com/10sorlabs/ComfyUI-10sorLabs-Sampler.git"
         }
       ],
       "description": "Install the selected ComfyUI models and custom nodes for this workflow.",
@@ -1225,14 +1225,6 @@
           "sha256": "3b2c89871d08bb13e8bf166edb9fd2e23c1349b9b48a0e1cad095f3f03a03335",
           "size_bytes": 25640200576,
           "url": "https://civitai.red/api/download/models/3157041?fileId=3038186&token=f7090e2b4aa459516413d7c017ee6f9a"
-        },
-        {
-          "auth": "none",
-          "destination": "models/vae/KreaVaeReal.safetensors",
-          "name": "KreaVaeReal.safetensors",
-          "sha256": "0dbbe0baeca04c2b98d2f3809c6f595608939809c88b695ba971368f17c874b8",
-          "size_bytes": 507591212,
-          "url": "https://civitai.red/api/download/models/3068442?fileId=2947164&token=f7090e2b4aa459516413d7c017ee6f9a"
         },
         {
           "auth": "none",
@@ -1281,6 +1273,30 @@
           "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b",
           "size_bytes": 253815318,
           "url": "https://huggingface.co/wangkanai/wan21-vae/resolve/main/vae/wan/wan21-vae.safetensors?download=true"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/snofs_krea_v1_6.safetensors",
+          "name": "snofs_krea_v1_6.safetensors",
+          "sha256": "fb6448cadf5293b33b02d650974f6d94280f48315b237198876f0b6a75674f08",
+          "size_bytes": 1562410216,
+          "url": "https://civitai.red/api/download/models/3446779?fileId=3345891&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/breast_size_v2_krea2_loraholic.safetensors",
+          "name": "breast_size_v2_krea2_loraholic.safetensors",
+          "sha256": "24c2acd5d3bf88920a084984099928c85ed17c985d914b8ceb19a1731aafd07f",
+          "size_bytes": 35769968,
+          "url": "https://civitai.red/api/download/models/3131773?fileId=3012392&token=f7090e2b4aa459516413d7c017ee6f9a"
+        },
+        {
+          "auth": "none",
+          "destination": "models/loras/ass_v2_krea2_loraholic.safetensors",
+          "name": "ass_v2_krea2_loraholic.safetensors",
+          "sha256": "06be93ed343ba85622819f931015c9c6910034cef81208c308fba03590e7ae42",
+          "size_bytes": 50051752,
+          "url": "https://civitai.red/api/download/models/3207249?fileId=3089257&token=f7090e2b4aa459516413d7c017ee6f9a"
         }
       ],
       "id": "krast",
