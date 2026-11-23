@@ -84,9 +84,9 @@ https://POD_ID-8888.proxy.runpod.net
 Set `JUPYTER_PASSWORD` in the RunPod template before exposing JupyterLab.
 Set `HF_TOKEN` when using Dataset Generator or Image Edit, and make sure the
 token's account has accepted the applicable Hugging Face model licenses.
-Images published by the project's GitHub Actions workflow can instead include
-the dedicated `HF_TOKEN` repository secret as a baked download
-credential. A runtime `HF_TOKEN` always takes precedence over the baked file.
+Images published by the project's GitHub Actions workflow include the dedicated
+`HF_TOKEN` and `CIVITAI_TOKEN` repository secrets as baked download credentials.
+Runtime token environment variables always take precedence over the baked files.
 
 ## Remote UI updates
 
@@ -224,12 +224,12 @@ Do not treat a token supplied to a user-controlled pod as secret. A person with
 Jupyter, SSH or container access can inspect the environment, filesystem and
 running processes. Never commit tokens to GitHub.
 
-The automated publishing workflow can deliberately place the dedicated,
-fine-grained `HF_TOKEN` Actions secret in the final image so public
-template users do not need to configure Hugging Face themselves. This keeps the
-credential out of source control and build logs, but it does not make the token
-secret from anyone who can pull or inspect the final image. Treat that token as
-public, narrowly scoped and disposable.
+The automated publishing workflow deliberately places the dedicated,
+fine-grained `HF_TOKEN` and `CIVITAI_TOKEN` Actions secrets in the final image so
+public template users do not need to configure either service themselves. This
+keeps the credentials out of source control and build logs, but it does not make
+them secret from anyone who can pull or inspect the final image. Treat those
+tokens as public, narrowly scoped and disposable.
 
 For production gated models, prefer one of:
 

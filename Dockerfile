@@ -6,6 +6,7 @@ FROM ${RUNPOD_COMFY_IMAGE}
 ARG IMAGE_VERSION=dev
 ARG HF_TOKEN_REVISION=local
 ARG REQUIRE_HF_DOWNLOAD_TOKEN=0
+ARG REQUIRE_CIVITAI_DOWNLOAD_TOKEN=0
 
 LABEL org.opencontainers.image.title="10sorLabs ComfyUI Workflow Launcher" \
       org.opencontainers.image.description="Stock RunPod ComfyUI plus the remotely updateable 10sorLabs Model Grabber" \
@@ -25,7 +26,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LAUNCHER_GITHUB_REF=main \
     LCT_API_BASE=https://rapidcache.10sorlabs.com \
     COMFYUI_DIR=/workspace/runpod-slim/ComfyUI \
-    HF_TOKEN_FILE=/opt/10sorlabs/secrets/hf_token
+    HF_TOKEN_FILE=/opt/10sorlabs/secrets/hf_token \
+    CIVITAI_TOKEN_FILE=/opt/10sorlabs/secrets/civitai_token
 
 WORKDIR /opt/10sorlabs
 
@@ -143,6 +145,7 @@ COPY docker/entrypoint.sh /start.sh
 # Dropping it would break two of six workflows for every non-subscriber. Rotation is a
 # separate decision, not a side effect of tidying this file.
 RUN --mount=type=secret,id=hf_download_token \
+    --mount=type=secret,id=civitai_download_token \
     set -eu; \
     chmod +x /start.sh; \
     install -d -m 0700 /opt/10sorlabs/secrets; \
@@ -155,6 +158,16 @@ RUN --mount=type=secret,id=hf_download_token \
     if [ "${REQUIRE_HF_DOWNLOAD_TOKEN}" = "1" ] \
        && [ ! -s /opt/10sorlabs/secrets/hf_token ]; then \
       echo "Required Hugging Face download credential was not supplied."; \
+      exit 1; \
+    fi; \
+    if [ -s /run/secrets/civitai_download_token ]; then \
+      install -m 0400 \
+        /run/secrets/civitai_download_token \
+        /opt/10sorlabs/secrets/civitai_token; \
+    fi; \
+    if [ "${REQUIRE_CIVITAI_DOWNLOAD_TOKEN}" = "1" ] \
+       && [ ! -s /opt/10sorlabs/secrets/civitai_token ]; then \
+      echo "Required Civitai download credential was not supplied."; \
       exit 1; \
     fi; \
     printf '%s' "${HF_TOKEN_REVISION}" > /opt/10sorlabs/secrets/.revision

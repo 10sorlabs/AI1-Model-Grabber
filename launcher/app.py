@@ -54,6 +54,7 @@ COMFYUI_LOCAL_URL = os.getenv("COMFYUI_LOCAL_URL", "http://127.0.0.1:8188").rstr
 # which either skips an update that was needed or never skips at all, silently.
 COMFYUI_UPSTREAM = "https://github.com/Comfy-Org/ComfyUI.git"
 DEFAULT_HF_TOKEN_FILE = Path("/opt/10sorlabs/secrets/hf_token")
+DEFAULT_CIVITAI_TOKEN_FILE = Path("/opt/10sorlabs/secrets/civitai_token")
 
 # Workflow-card estimates use measured transfer baselines, not marketing best cases.
 # 57 MB/s is the supplied average for a standard Krea 2 download. RapidCache has
@@ -528,7 +529,7 @@ def custom_download_request(url: str) -> tuple[str, dict[str, str]]:
         if token:
             headers["Authorization"] = f"Bearer {token}"
     elif hostname == "civitai.com" or hostname.endswith(".civitai.com"):
-        token = (os.getenv("CIVITAI_TOKEN") or os.getenv("CIVITAI_API_TOKEN") or "").strip()
+        token = civitai_token()
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         if token and "token" not in query:
             query["token"] = token
@@ -756,6 +757,23 @@ def huggingface_token() -> str:
         return ""
 
 
+def civitai_token() -> str:
+    token = (
+        os.getenv("CIVITAI_TOKEN", "").strip()
+        or os.getenv("CIVITAI_API_TOKEN", "").strip()
+    )
+    if token:
+        return token
+
+    token_file = Path(
+        os.getenv("CIVITAI_TOKEN_FILE", str(DEFAULT_CIVITAI_TOKEN_FILE))
+    ).expanduser()
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
 def host_matches(hostname: str, allowed: tuple[str, ...]) -> bool:
     return any(hostname == host or hostname.endswith(f".{host}") for host in allowed)
 
@@ -817,7 +835,7 @@ def tokenized_request(file_spec: dict[str, Any]) -> tuple[str, dict[str, str]]:
             )
         headers["Authorization"] = f"Bearer {token}"
     elif auth == "civitai":
-        token = os.getenv("CIVITAI_TOKEN") or os.getenv("CIVITAI_API_TOKEN")
+        token = civitai_token()
         if not token:
             raise RuntimeError(
                 f"{file_spec.get('name', 'This file')} requires CIVITAI_TOKEN."

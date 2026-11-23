@@ -75,7 +75,9 @@ jobs:
             IMAGE_VERSION=${{ inputs.tag }}
             HF_TOKEN_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
             REQUIRE_HF_DOWNLOAD_TOKEN=1
+            REQUIRE_CIVITAI_DOWNLOAD_TOKEN=1
           secrets: |
             hf_download_token=${{ secrets.HF_TOKEN }}
+            civitai_download_token=${{ secrets.CIVITAI_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=min

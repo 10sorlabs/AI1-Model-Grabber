@@ -212,8 +212,8 @@ def test_health_and_public_catalog() -> None:
         response = client.get("/api/catalog")
         assert response.status_code == 200
         workflows = response.json()["workflows"]
-        assert len(workflows) == 9
-        assert sum(not item.get("disabled", False) for item in workflows) == 9
+        assert len(workflows) == 10
+        assert sum(not item.get("disabled", False) for item in workflows) == 10
         assert "files" not in workflows[0]
         assert "custom_nodes" not in workflows[0]
         assert "url" not in workflows[0]
@@ -239,6 +239,7 @@ def test_catalog_contains_installers_but_no_product_workflows() -> None:
         "minimax-h3-v2",
         "krea2-pro",
         "h3-motion-control",
+        "krast",
     ]
     assert {
         "image-generation",
@@ -481,7 +482,13 @@ def test_h3_motion_control_installs_viggle_and_the_cu130_runtime() -> None:
             "name": "ComfyUI-Viggle-Remake",
             "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
             "repo": "https://huggingface.co/Viggle/Viggle-Remake",
-        }
+        },
+        {
+            "install_requirements": True,
+            "name": "ComfyUI-VideoHelperSuite",
+            "ref": "4d907bee61e92c2e65af3bd6383a4e4d356126d1",
+            "repo": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git",
+        },
     ]
 
 
@@ -652,6 +659,33 @@ def test_huggingface_auth_can_use_baked_token_file(
 
     assert url.endswith("model.safetensors")
     assert headers["Authorization"] == "Bearer hf_test_only"
+
+
+def test_civitai_auth_can_use_baked_token_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    token_file = tmp_path / "civitai_token"
+    token_file.write_text("civitai_test_only", encoding="utf-8")
+    monkeypatch.delenv("CIVITAI_TOKEN", raising=False)
+    monkeypatch.delenv("CIVITAI_API_TOKEN", raising=False)
+    monkeypatch.setenv("CIVITAI_TOKEN_FILE", str(token_file))
+
+    url, headers = launcher_app.tokenized_request(
+        {
+            "name": "Civitai test model",
+            "url": "https://civitai.com/api/download/models/1234?fileId=5678",
+            "auth": "civitai",
+        }
+    )
+
+    assert "token=civitai_test_only" in url
+    assert headers["User-Agent"].startswith("10sorLabs-Model-Grabber/")
+
+    custom_url, _ = launcher_app.custom_download_request(
+        "https://civitai.com/api/download/models/1234?fileId=5678"
+    )
+    assert "token=civitai_test_only" in custom_url
 
 
 def test_frontend_is_served() -> None:
@@ -1573,7 +1607,7 @@ def test_catalog_api_is_skipped_when_no_base_is_configured(monkeypatch) -> None:
     monkeypatch.delenv("LCT_API_BASE", raising=False)
 
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 9
+    assert len(launcher_app.load_catalog()["workflows"]) == 10
 
 
 def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
@@ -1586,19 +1620,19 @@ def test_catalog_api_failures_fall_back_to_the_bundled_catalog(
     monkeypatch.setenv("LCT_API_BASE", f"http://127.0.0.1:{closed_port()}")
     launcher_remote._reset_state()
     assert launcher_remote.fetch_catalog() is None
-    assert len(launcher_app.load_catalog()["workflows"]) == 9
+    assert len(launcher_app.load_catalog()["workflows"]) == 10
 
     with catalog_api(b"upstream exploded", status=500) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 9
+        assert len(launcher_app.load_catalog()["workflows"]) == 10
 
     with catalog_api(b'{"workflows": [') as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         launcher_remote._reset_state()
         assert launcher_remote.fetch_catalog() is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 9
+        assert len(launcher_app.load_catalog()["workflows"]) == 10
 
 
 def test_catalog_request_omits_authorization_without_a_credential(
@@ -1699,7 +1733,7 @@ def test_malformed_remote_catalog_falls_back_instead_of_breaking_the_pod(
             monkeypatch.setenv("LCT_API_BASE", base)
             launcher_remote._reset_state()
             catalog = launcher_app.load_catalog(fresh=True)
-        assert len(catalog["workflows"]) == 9
+        assert len(catalog["workflows"]) == 10
 
 
 def test_a_malformed_bundled_catalog_still_raises(tmp_path, monkeypatch) -> None:
@@ -1734,7 +1768,7 @@ def test_remote_catalog_without_a_checksum_falls_back_to_the_bundled_catalog(
     with catalog_api(body) as base:
         monkeypatch.setenv("LCT_API_BASE", base)
         assert launcher_remote.fetch_catalog(fresh=True) is None
-        assert len(launcher_app.load_catalog()["workflows"]) == 9
+        assert len(launcher_app.load_catalog()["workflows"]) == 10
 
 
 def test_public_catalog_never_leaks_install_details(monkeypatch) -> None:
