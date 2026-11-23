@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import configparser
 import contextlib
 import errno
@@ -5627,6 +5628,17 @@ def test_the_audit_flags_a_vcs_requirement() -> None:
     assert "VCS requirement" in finding.reason
 
 
+def test_the_audit_strips_a_vcs_revision_from_the_package_name() -> None:
+    finding = audit_script.classify_requirement(
+        "diffusers @ git+https://github.com/huggingface/diffusers@d6726f3",
+        "ComfyUI-Viggle-Remake",
+        pypi_fixture([]),
+    )
+
+    assert finding is not None
+    assert finding.package == "diffusers"
+
+
 def test_the_audit_flags_a_direct_url_requirement() -> None:
     """PEP 508 spelling of the same problem."""
     finding = audit_script.classify_requirement(
@@ -5747,7 +5759,7 @@ def test_a_listed_source_build_does_not_fail_the_run(tmp_path) -> None:
 def test_the_shipped_allowlist_says_how_each_source_build_is_paid_for() -> None:
     allowed = audit_script.read_known_source_builds(audit_script.KNOWN_SOURCE_BUILDS)
 
-    assert set(allowed) == {"sam2", "dlib", "nvidia-vfx"}
+    assert set(allowed) == {"sam2", "dlib", "nvidia-vfx", "diffusers"}
     assert all(reason for reason in allowed.values())
 
 
@@ -5793,13 +5805,15 @@ def test_the_audit_authenticates_only_hugging_face_clones(monkeypatch) -> None:
     )
 
     assert huggingface["GIT_CONFIG_COUNT"] == "1"
+    assert huggingface["GIT_LFS_SKIP_SMUDGE"] == "1"
     assert huggingface["GIT_CONFIG_KEY_0"] == (
         "http.https://huggingface.co/.extraheader"
     )
-    assert huggingface["GIT_CONFIG_VALUE_0"] == (
-        "Authorization: Bearer hf_test_only"
-    )
+    auth_scheme, encoded = huggingface["GIT_CONFIG_VALUE_0"].split(" ", 2)[1:]
+    assert auth_scheme == "Basic"
+    assert base64.b64decode(encoded).decode("utf-8") == "hf_user:hf_test_only"
     assert "GIT_CONFIG_VALUE_0" not in github
+    assert github["GIT_LFS_SKIP_SMUDGE"] == "1"
 
 
 def test_aria2_report_lines_drops_paths_without_mangling_aria2s_arithmetic() -> None:

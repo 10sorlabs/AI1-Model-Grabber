@@ -24,6 +24,7 @@ impossible, and there is a test pinning exactly it.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -120,6 +121,8 @@ def name_from_url(url: str) -> str:
         return url.split("#egg=", 1)[1].split("&", 1)[0]
     path = urlsplit(url.split("#", 1)[0]).path.rstrip("/")
     tail = path.rsplit("/", 1)[-1] if path else url
+    if url.lower().startswith(VCS_PREFIXES):
+        tail = tail.split("@", 1)[0]
     for suffix in (".git", ".zip", ".tar.gz", ".whl"):
         if tail.endswith(suffix):
             tail = tail[: -len(suffix)]
@@ -243,8 +246,11 @@ def pypi_payload(name: str) -> dict | None:
 
 
 def git_clone_environment(repo: str) -> dict[str, str]:
-    """Authenticate only Hugging Face clones without putting the token in argv."""
+    """Skip model blobs and authenticate Hugging Face without putting tokens in argv."""
     environment = os.environ.copy()
+    # The audit reads requirements.txt, never the multi-gigabyte model objects that a
+    # Hugging Face node repository can track through Git LFS.
+    environment["GIT_LFS_SKIP_SMUDGE"] = "1"
     hostname = (urlsplit(repo).hostname or "").lower()
     token = os.getenv("HF_TOKEN", "").strip()
     if hostname == "huggingface.co" and token:
@@ -256,8 +262,11 @@ def git_clone_environment(repo: str) -> dict[str, str]:
         environment[f"GIT_CONFIG_KEY_{config_index}"] = (
             "http.https://huggingface.co/.extraheader"
         )
+        basic_credential = base64.b64encode(
+            f"hf_user:{token}".encode("utf-8")
+        ).decode("ascii")
         environment[f"GIT_CONFIG_VALUE_{config_index}"] = (
-            f"Authorization: Bearer {token}"
+            f"Authorization: Basic {basic_credential}"
         )
     return environment
 
@@ -265,8 +274,14 @@ def git_clone_environment(repo: str) -> dict[str, str]:
 def requirements_at_ref(repo: str, ref: str, workdir: Path) -> str:
     """Clone blobless, detach at the pinned sha, and read requirements.txt."""
     checkout = workdir / ref[:12]
+    clone_command = ["git", "clone", "--quiet"]
+    # Hugging Face's Git endpoint can fail a partial clone with "expected packfile".
+    # Its large payloads are LFS objects, which GIT_LFS_SKIP_SMUDGE already excludes.
+    if (urlsplit(repo).hostname or "").lower() != "huggingface.co":
+        clone_command.append("--filter=blob:none")
+    clone_command.extend((repo, str(checkout)))
     subprocess.run(
-        ["git", "clone", "--filter=blob:none", "--quiet", repo, str(checkout)],
+        clone_command,
         check=True,
         capture_output=True,
         env=git_clone_environment(repo),

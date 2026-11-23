@@ -15,3 +15,7 @@ dlib   # sdist only; PyPI has no wheel for any Python. Built into the image by i
 nvidia-vfx  # NVIDIA wheel-stub used by Nvidia_RTX_Nodes_ComfyUI. The catalog supplies
             # https://pypi.nvidia.com/ and the launcher uses --no-build-isolation, so the
             # stub selects NVIDIA's prebuilt CPython 3.12 manylinux x86_64 wheel.
+
+diffusers  # Viggle Remake pins a pure-Python VCS revision. The image pre-installs its
+           # wheel release and build backend, and the launcher uses --no-build-isolation,
+           # so installing the reviewed checkout does not rebuild torch or CUDA packages.
