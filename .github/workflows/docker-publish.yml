@@ -37,6 +37,8 @@ jobs:
       # stops one shipping with a requirement that would build from source on a
       # customer's pod. The classifier itself is covered by the suite above, offline.
       - name: Audit node pack requirements
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python -m pip install packaging
           python scripts/audit_node_requirements.py

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -241,6 +242,26 @@ def pypi_payload(name: str) -> dict | None:
         raise
 
 
+def git_clone_environment(repo: str) -> dict[str, str]:
+    """Authenticate only Hugging Face clones without putting the token in argv."""
+    environment = os.environ.copy()
+    hostname = (urlsplit(repo).hostname or "").lower()
+    token = os.getenv("HF_TOKEN", "").strip()
+    if hostname == "huggingface.co" and token:
+        try:
+            config_index = int(environment.get("GIT_CONFIG_COUNT", "0"))
+        except ValueError:
+            config_index = 0
+        environment["GIT_CONFIG_COUNT"] = str(config_index + 1)
+        environment[f"GIT_CONFIG_KEY_{config_index}"] = (
+            "http.https://huggingface.co/.extraheader"
+        )
+        environment[f"GIT_CONFIG_VALUE_{config_index}"] = (
+            f"Authorization: Bearer {token}"
+        )
+    return environment
+
+
 def requirements_at_ref(repo: str, ref: str, workdir: Path) -> str:
     """Clone blobless, detach at the pinned sha, and read requirements.txt."""
     checkout = workdir / ref[:12]
@@ -248,6 +269,7 @@ def requirements_at_ref(repo: str, ref: str, workdir: Path) -> str:
         ["git", "clone", "--filter=blob:none", "--quiet", repo, str(checkout)],
         check=True,
         capture_output=True,
+        env=git_clone_environment(repo),
     )
     subprocess.run(
         ["git", "-C", str(checkout), "checkout", "--detach", "--quiet", ref],

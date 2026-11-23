@@ -5779,6 +5779,29 @@ def test_the_audit_walks_each_pinned_pack_once() -> None:
     )
 
 
+def test_the_audit_authenticates_only_hugging_face_clones(monkeypatch) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_test_only")
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_KEY_0", raising=False)
+    monkeypatch.delenv("GIT_CONFIG_VALUE_0", raising=False)
+
+    huggingface = audit_script.git_clone_environment(
+        "https://huggingface.co/Viggle/Viggle-Remake"
+    )
+    github = audit_script.git_clone_environment(
+        "https://github.com/example/example.git"
+    )
+
+    assert huggingface["GIT_CONFIG_COUNT"] == "1"
+    assert huggingface["GIT_CONFIG_KEY_0"] == (
+        "http.https://huggingface.co/.extraheader"
+    )
+    assert huggingface["GIT_CONFIG_VALUE_0"] == (
+        "Authorization: Bearer hf_test_only"
+    )
+    assert "GIT_CONFIG_VALUE_0" not in github
+
+
 def test_aria2_report_lines_drops_paths_without_mangling_aria2s_arithmetic() -> None:
     """A WARN can name the file it could not open, and the no-paths rule has no exceptions.
 
