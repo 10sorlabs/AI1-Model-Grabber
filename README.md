@@ -1,96 +1,161 @@
-# 10sorLabs AI1 Model Grabber
+<p align="center">
+  <img src="launcher/static/logo.png" alt="10sorLabs" width="96">
+</p>
 
-A lightweight, single-page workflow launcher that runs next to stock ComfyUI on
-RunPod.
+<h1 align="center">10sorLabs AI1 Model Grabber</h1>
+
+<p align="center">
+  Deploy curated ComfyUI model stacks on RunPod without manually hunting down
+  model files, custom nodes or Python dependencies.
+</p>
+
+<p align="center">
+  <strong>Developed by <a href="https://10sorlabs.com">10sorLabs</a></strong>
+  ·
+  <a href="https://10sorlabs.com">Workflows, tutorials and AI creator tools</a>
+</p>
+
+## What it does
+
+AI1 Model Grabber runs beside ComfyUI and turns large, multi-step setups into
+guided installs. Choose a preset and the launcher downloads the reviewed model
+files, installs the required custom nodes, verifies the results and restarts
+ComfyUI when everything is ready.
+
+It is designed for creators who want to spend their GPU time generating—not
+debugging paths, dependencies and missing files.
+
+### Highlights
+
+- Ten curated image and video model presets.
+- Visible download progress with resumable partial transfers.
+- SHA-256 and file-size verification where available.
+- Pinned custom-node revisions for reproducible installs.
+- Automatic dependency installation in ComfyUI's Python environment.
+- Custom model downloads into any standard or discovered model folder.
+- Custom-node installation from GitHub repositories.
+- Failure isolation: one failed item does not discard successful work.
+- Automatic ComfyUI restart and readiness checks after installation.
+- Optional launcher and catalog updates from this repository at startup.
+- Built-in Hugging Face and Civitai download access in the published image.
+
+## Quick start on RunPod
+
+Use these template settings:
+
+| Setting | Value |
+| --- | --- |
+| Container image | `10sorllabs/comfyui-workflow-launcher:1.0` |
+| HTTP ports | `3000`, `8188`, `8888` |
+| Container disk | 200 GB recommended for the largest presets |
+| Persistent volume | Optional; mount at `/workspace` when used |
+| GPU | NVIDIA |
+
+Set `JUPYTER_PASSWORD` before exposing JupyterLab publicly.
+
+After the pod starts, open:
+
+| Service | URL |
+| --- | --- |
+| AI1 Model Grabber | `https://POD_ID-3000.proxy.runpod.net` |
+| ComfyUI | `https://POD_ID-8188.proxy.runpod.net` |
+| JupyterLab | `https://POD_ID-8888.proxy.runpod.net` |
+
+Open AI1 Model Grabber first, choose a preset and start the installation. The
+launcher opens the matching ComfyUI proxy when the setup is complete.
+
+> The published image already contains the project's read-only Hugging Face and
+> Civitai download credentials. Normal RunPod users do not need to add
+> `HF_TOKEN` or `CIVITAI_TOKEN` manually.
+
+## Available presets
+
+| Preset | Estimated model size | Purpose |
+| --- | ---: | --- |
+| Krea 2 Extended | ~25.4 GB | Extended Krea 2 image stack |
+| WAN Motion Control | ~45.4 GB | WAN motion-control generation |
+| Motion Control GOD Edition | ~61.3 GB | Expanded motion-control stack |
+| MiniMax H3 | ~63.4 GB | MiniMax H3 image/video setup |
+| KRQW2.1 | ~44.3 GB | Krea 2 Turbo and Qwen Image 2.1 stack |
+| DarkDesire H3 | ~83.2 GB | DarkDesire Krea 2 and H3 stack |
+| MiniMax H3 V2 | Custom setup | CUDA 13 runtime and reviewed native setup |
+| Krea2 Pro | Custom setup | Extended Krea 2 production stack |
+| H3 Motion Control | Custom setup | H3 motion control with Viggle Remake |
+| KRAST | Custom setup | Curated KRAST model and node stack |
+
+Sizes cover catalog model files and do not include temporary working space,
+Python packages, caches or files you add yourself.
 
 ## What is included
 
-- Stock `runpod/comfyui:cuda12.8`, pinned to a known image digest.
+The image provides:
+
+- Stock RunPod ComfyUI, pinned to a reviewed base-image digest.
 - ComfyUI on port `8188`.
 - JupyterLab on port `8888`.
-- 10sorLabs Model Grabber on port `3000`.
-- Resumable `.part` downloads with visible progress.
-- Workflow and custom-node installation from a declarative JSON catalog.
-- A Custom Models queue for direct downloads into any ComfyUI model folder.
-- A button that routes from the launcher to the matching RunPod ComfyUI proxy.
-- Optional launcher updates from GitHub at container startup.
+- AI1 Model Grabber on port `3000`.
+- A declarative workflow catalog.
+- Preinstalled dependencies used by the catalog's custom nodes.
+- Automatic GitHub-based launcher updates with a safe baked fallback.
 
-The current catalog contains eight production installers:
+The public catalog installs models, supporting files and custom nodes. It does
+not distribute 10sorLabs' product workflow JSON files.
 
-- Krea 2 Extended (approximately 25.4 GB)
-- WAN Motion Control (approximately 45.4 GB)
-- Motion Control GOD Edition
-- MiniMax H3 (approximately 63.4 GB)
-- KRQW2.1 (approximately 44.3 GB)
-- DarkDesire H3 (approximately 83.2 GB)
-- MiniMax H3 V2 (custom setup, including the PyTorch CUDA 13.0 runtime)
-- Krea2 Pro (custom setup)
+For complete workflows, tutorials, prompts and creator playbooks, visit
+**[10sorLabs.com](https://10sorlabs.com)**.
 
-The catalog installs only models, supporting files and custom nodes. Product
-workflow JSON files are deliberately not included.
+## Using AI1 Model Grabber
 
-Each preset continues after an individual model or custom-node failure. Failed
-items are shown as warnings at the end so the remaining downloads and node
-installs are not discarded. Most custom nodes remain pinned to a known commit for reproducibility. The first-party
-`ComfyUI-10SOR-Regeneration-Gate` is the exception: the KRQW2.1 preset follows
-`main`, fetching the newest commit on each install and using fast-forward-only
-updates without a forced reset. Other custom-node pins are unchanged.
-After every preset installation, ComfyUI is automatically restarted through
-ComfyUI Manager and the launcher waits until port 8188 is ready again.
+### Preset installs
 
-## Custom models
+Each preset is processed as a queue of verified model downloads and reviewed
+custom-node installs. Successful items are retained when a later item fails, and
+the final screen reports anything that still needs attention.
 
-The **Custom models** section accepts a direct HTTP(S) model link and a target
-folder inside `ComfyUI/models`. It includes ComfyUI's standard model locations,
-discovers existing folders on the pod and can create a new custom subfolder.
+Most third-party nodes are pinned to a 40-character commit SHA. The reviewed
+first-party `ComfyUI-10SOR-Regeneration-Gate` integration is the only supported
+moving-branch exception and follows `main` with fast-forward-only updates.
 
-Every click adds one download to a single serial queue. Custom downloads always
-start from scratch: an existing `.part` file is removed before the request. A
-complete model with the same filename and recognized size/checksum is skipped
-and shown under **Downloaded models** instead of being overwritten.
+### Custom models
 
-## Custom nodes
+Paste a direct HTTP(S) model URL, choose a target folder and add it to the queue.
+The launcher supports ComfyUI's standard model folders, discovers existing
+folders and can create a new subfolder.
 
-The **Custom nodes** section accepts GitHub repository links and processes every
-click through one serial install queue. Repositories are cloned into a temporary
-folder, their `requirements.txt` is installed with ComfyUI's Python environment,
-and the completed folder is then moved into `ComfyUI/custom_nodes`.
+Downloads run serially. A valid existing file is kept; incomplete or invalid
+files are replaced safely.
 
-An existing checkout with the same Git origin is shown as already found. Failed
-clones or dependency installs remove their temporary folder instead of leaving
-an incomplete custom node behind. Newly installed nodes require a ComfyUI
-restart before they become available; the **Restart ComfyUI** button performs
-that restart without restarting the pod.
+### Custom nodes
 
-## RunPod template
+Paste a GitHub repository URL to clone it into `ComfyUI/custom_nodes`. The
+launcher installs its `requirements.txt` in ComfyUI's Python environment and
+only moves the completed checkout into place after installation succeeds.
 
-Use:
+New nodes require a ComfyUI restart. Use the launcher's **Restart ComfyUI**
+button—there is no need to restart the entire pod.
 
-```text
-Container image: 10sorllabs/comfyui-workflow-launcher:1.0
-HTTP ports:      3000, 8188, 8888
-Container disk:  at least 60 GB for the largest individual installer
-```
+## Download credentials
 
-No persistent volume is required. The public service URLs follow RunPod's normal
-format:
+Images published by this repository's GitHub Actions workflow contain dedicated,
+read-only `HF_TOKEN` and `CIVITAI_TOKEN` credentials. They are used for gated
+or authenticated catalog downloads so public template users do not need to
+configure tokens for every pod.
 
-```text
-https://POD_ID-3000.proxy.runpod.net
-https://POD_ID-8188.proxy.runpod.net
-https://POD_ID-8888.proxy.runpod.net
-```
+Runtime environment variables take precedence over the baked credentials:
 
-Set `JUPYTER_PASSWORD` in the RunPod template before exposing JupyterLab.
-Set `HF_TOKEN` when using Dataset Generator or Image Edit, and make sure the
-token's account has accepted the applicable Hugging Face model licenses.
-Images published by the project's GitHub Actions workflow include the dedicated
-`HF_TOKEN` and `CIVITAI_TOKEN` repository secrets as baked download credentials.
-Runtime token environment variables always take precedence over the baked files.
+| Variable | Purpose |
+| --- | --- |
+| `HF_TOKEN` | Override Hugging Face download access |
+| `HUGGING_FACE_HUB_TOKEN` | Alternative Hugging Face variable |
+| `CIVITAI_TOKEN` | Override Civitai download access |
+| `CIVITAI_API_TOKEN` | Alternative Civitai variable |
 
-## Remote UI updates
+Credentials are restricted to their matching hosts. A catalog entry cannot send
+a Hugging Face, Civitai or GitHub credential to an unrelated domain.
 
-At startup, the baked bootstrapper checks:
+## Remote updates
+
+The container starts with:
 
 ```text
 LAUNCHER_GITHUB_REPO=10sorlabs/AI1-Model-Grabber
@@ -98,24 +163,54 @@ LAUNCHER_GITHUB_REF=main
 LAUNCHER_AUTO_UPDATE=1
 ```
 
-If the repository is public, no GitHub credential is required. If it is private,
-the pod needs `GITHUB_TOKEN`. When GitHub is unavailable or the downloaded source
-is invalid, the launcher safely falls back to the version baked into the image.
+On startup, the bootstrapper checks this public repository for launcher, catalog
+and frontend updates. If GitHub is unavailable or the downloaded source is
+invalid, the container falls back to the version baked into the image.
 
-Changes to HTML, CSS, JavaScript, the Python launcher or `catalog/workflows.json`
-therefore appear on newly started pods without rebuilding the image, provided
-they do not introduce new Python packages.
+Changes that introduce new system or Python dependencies still require a new
+Docker image build.
 
-## Workflow catalog
+## Useful environment variables
 
-Workflow tiles live in `catalog/workflows.json`. A real workflow can define files
-and custom nodes:
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LAUNCHER_PORT` | `3000` | AI1 Model Grabber port |
+| `LAUNCHER_AUTO_UPDATE` | `1` | Enable GitHub updates at startup |
+| `LAUNCHER_GITHUB_REPO` | `10sorlabs/AI1-Model-Grabber` | Update source |
+| `LAUNCHER_GITHUB_REF` | `main` | Update branch or ref |
+| `COMFYUI_DIR` | `/workspace/runpod-slim/ComfyUI` | ComfyUI installation |
+| `COMFYUI_PUBLIC_URL` | Auto-detected | Explicit ComfyUI browser URL |
+| `JUPYTER_PASSWORD` | Empty | Password for public JupyterLab access |
+| `GITHUB_TOKEN` | Empty | Only needed for a private update repository |
+
+See [`.env.example`](.env.example) for the complete list.
+
+## Local Windows installers
+
+Standalone installers live in [`local-installers/`](local-installers):
+
+- Dataset Generator
+- Krea 2
+- MiniMax H3
+
+Copy the required `.bat` file into the main ComfyUI directory—the folder that
+contains `models` and `custom_nodes`—and run it while ComfyUI is stopped.
+
+These scripts verify SHA-256 checksums, install pinned custom-node revisions and
+retain completed items if a later step fails. The Dataset Generator installer
+reads `HF_TOKEN` or prompts for one because local Windows installers do not
+contain the Docker image's baked credential files.
+
+## Catalog format
+
+Preset definitions live in [`catalog/workflows.json`](catalog/workflows.json).
+A minimal entry looks like this:
 
 ```json
 {
   "id": "example-workflow",
   "title": "Example Workflow",
-  "description": "Installs everything needed for the example.",
+  "description": "Install the example model stack.",
   "badge": "IMAGE",
   "accent": "#b8ff5a",
   "estimated_size": "18.4 GB",
@@ -128,12 +223,6 @@ and custom nodes:
       "size_bytes": 123456789,
       "sha256": "optional-sha256",
       "auth": "huggingface"
-    },
-    {
-      "name": "Example workflow",
-      "url": "https://example.com/workflow.json",
-      "destination": "user/default/workflows/example.json",
-      "auth": "none"
     }
   ],
   "custom_nodes": [
@@ -147,130 +236,75 @@ and custom nodes:
 }
 ```
 
-Workflow custom nodes normally use pinned GitHub repositories. The single reviewed
-exception is Viggle Remake, whose node code lives inside its Hugging Face model
-repository. Use this exact entry; the launcher downloads only the nested ComfyUI
-folder at the pinned revision:
+Supported file authentication values are `none`, `huggingface`, `civitai`
+and `github`.
 
-```json
-{
-  "name": "ComfyUI-Viggle-Remake",
-  "repo": "https://huggingface.co/Viggle/Viggle-Remake",
-  "ref": "7e5be143702dd53b9154482de673b8519ed2d4d6",
-  "install_requirements": true
-}
-```
+### Reviewed special setup
 
-Set `update_comfyui` to `true` when a preset requires the newest ComfyUI code.
-Before downloading that preset, the launcher updates from
-`Comfy-Org/ComfyUI:master` and installs its requirements into the ComfyUI Python
-environment. The standard end-of-preset restart then loads the new version.
+The catalog can select closed, code-defined `runtime_profile` values for setup
+that cannot be represented as ordinary files and Python requirements. Remote
+catalog data cannot execute arbitrary shell commands.
 
-`runtime_profile` is a closed allowlist for reviewed native setup that cannot be
-expressed as a model or custom-node requirement. The
-`sageattention-cu128-hopper-blackwell` profile compiles SageAttention 2.2.0 for
-compute capabilities 9.0, 10.0 and 12.0, then verifies SageAttention, Triton and
-the CUDA ONNX provider before completing the install. Arbitrary commands from a
-remote catalog are never executed.
+Current reviewed profiles cover:
 
-The MiniMax H3 V2 tile uses the `minimax-h3-cu130` profile. It checks for an
-NVIDIA 580-or-newer driver, installs the matching PyTorch 2.10.0, TorchVision
-0.25.0 and TorchAudio 2.10.0 CUDA 13.0 wheels into ComfyUI's Python environment,
-and verifies their versions, import locations and GPU access. RunPod's cu128 pip
-constraints are removed only for these reviewed child processes. If verification
-fails, the launcher records the missing or mismatched components and performs one
-clean repair attempt; it never retries indefinitely. The full result is included
-in the Debug install report under `RUNTIME PROFILE`.
+- SageAttention builds for supported NVIDIA compute capabilities.
+- MiniMax H3 V2's PyTorch CUDA 13 runtime and verification.
+- NVIDIA NGX userspace-library recovery without replacing RunPod's driver stack.
 
-Before that runtime setup, MiniMax H3 V2 updates ComfyUI to the current official
-`master` and writes `security_level = weak` to the `[default]` section of
-`user/__manager/config.ini`. The existing Manager configuration is preserved and
-the file is replaced atomically. This order matters: current ComfyUI provides the
-system-user API that makes `__manager` the authoritative location, and creating
-the new config before the final restart prevents legacy migration from raising the
-requested level back to `normal`.
+`model_links` can expose one downloaded model at an additional path using a
+hard link, with a copy fallback when the filesystem does not support links.
 
-The same MiniMax runtime check also verifies that the NVIDIA NGX userspace library
-needed by some super-resolution nodes is visible through `ldconfig`. If RunPod has
-injected the GPU driver without NGX, the launcher downloads the matching Ubuntu
-`libnvidia-gl-<driver>-server` package, extracts it in `/tmp`, and copies only the
-versioned `libnvidia-ngx.so` file into `/usr/local/lib`. It then creates the `.so.1`
-and unversioned links and refreshes the linker cache. The full NVIDIA package is
-never installed, so this fallback does not replace the pod's injected driver stack.
+## Development
 
-`model_links` can expose a catalog model at the private path expected by a custom
-node without downloading or permanently storing it twice. Both `source` and
-`destination` are relative to the ComfyUI directory; the launcher prefers a hard
-link and falls back to a copy when the filesystem does not support one.
-
-Supported file authentication values are `none`, `huggingface`, `civitai` and
-`github`. Corresponding environment names are documented in `.env.example`.
-Download URLs and authentication details are not returned by the public catalog
-API.
-
-## Local Windows installers
-
-Standalone Windows installers for Dataset Generator, Krea 2 and MiniMax H3 live
-in `local-installers/`. Copy the required `.bat` file directly into the main
-ComfyUI directory—the folder containing `models` and `custom_nodes`—and run it
-while ComfyUI is stopped. The scripts verify SHA-256 checksums, install pinned
-custom-node versions and their requirements, and retain successful items if a
-later item fails. Dataset Generator reads a gated-model token from `HF_TOKEN` or
-prompts for one. MiniMax H3 also updates ComfyUI before installing its files.
-
-## Security note
-
-Do not treat a token supplied to a user-controlled pod as secret. A person with
-Jupyter, SSH or container access can inspect the environment, filesystem and
-running processes. Never commit tokens to GitHub.
-
-The automated publishing workflow deliberately places the dedicated,
-fine-grained `HF_TOKEN` and `CIVITAI_TOKEN` Actions secrets in the final image so
-public template users do not need to configure either service themselves. This
-keeps the credentials out of source control and build logs, but it does not make
-them secret from anyone who can pull or inspect the final image. Treat those
-tokens as public, narrowly scoped and disposable.
-
-For production gated models, prefer one of:
-
-1. Bake distributable model files into independent Docker layers.
-2. Require each pod owner to provide a fine-grained read-only token.
-3. Issue short-lived download URLs from a separate trusted service.
-
-The launcher supports `HF_TOKEN` and `CIVITAI_TOKEN` for controlled/private use,
-but it cannot hide those values from the owner of the pod.
-
-## Local launcher development
-
-Create a Python environment and install:
+The launcher requires Python 3.12 or newer.
 
 ```text
-pip install -r requirements-launcher.txt pytest
+python -m pip install -r requirements-launcher.txt pytest
+python -m pytest
+python -m uvicorn launcher.app:app --port 3000
 ```
 
-Then run:
+For the short demo duration used during frontend work:
 
 ```text
 DEMO_DURATION_OVERRIDE=1 python -m uvicorn launcher.app:app --port 3000
 ```
 
-On Windows PowerShell, set environment variables with `$env:NAME="value"` first.
+On PowerShell, set environment variables with `$env:NAME="value"`.
 
-## Build manually
+## Build and publish
+
+Manual build:
 
 ```text
 docker build -t 10sorllabs/comfyui-workflow-launcher:1.0 .
 docker push 10sorllabs/comfyui-workflow-launcher:1.0
 ```
 
-Alternatively, run the included GitHub Actions workflow after adding repository
-secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+The GitHub Actions publishing workflow additionally requires these repository
+secrets:
 
-## First-party live update policy
+- `DOCKERHUB_TOKEN`
+- `HF_TOKEN`
+- `CIVITAI_TOKEN`
 
-The `KRQW2.1` custom-node entry `ComfyUI-10SOR-Regeneration-Gate` uses `"ref": "main"`.
-The installer recognizes **only** this exact repository and name as eligible for a
-moving branch. On each preset install it fetches `origin main`, switches to local
-`main` and merges `origin/main` with `--ff-only`. Local changes or divergence
-cause a clear error instead of being overwritten. Restart ComfyUI after updating
-to load the latest backend and frontend extension.
+The workflow runs the launcher test suite and audits every catalog custom-node
+requirement before publishing.
+
+## Credential distribution note
+
+A credential baked into an image available to user-controlled pods must be
+treated as public. The project therefore uses narrowly scoped, read-only,
+disposable accounts for shared downloads. Runtime tokens are visible to the
+owner of the pod and should never provide write access or access to unrelated
+private resources.
+
+## About 10sorLabs
+
+10sorLabs builds practical ComfyUI workflows, tutorials and creator tools for
+running consistent AI image and video production without depending on closed
+generation platforms.
+
+**Developed by [10sorLabs](https://10sorlabs.com).**
+
+Explore the complete toolkit at **[10sorLabs.com](https://10sorlabs.com)**.
